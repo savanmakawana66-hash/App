@@ -19,9 +19,12 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build APK
+      - name: Install Virtual Display (Xvfb)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Build APK with Virtual Display
         working-directory: ./app
-        run: gradle assembleDebug --no-daemon -Djava.awt.headless=true
+        run: xvfb-run gradle assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
