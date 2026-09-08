@@ -1,0 +1,6 @@
+{
+  "name": "Watch Together",
+  "description": "Modern social watch-together app with synchronized permanent rooms, 8-seat voice rooms, audience mode, chat, and friend DMs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
