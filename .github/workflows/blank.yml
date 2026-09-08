@@ -20,7 +20,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       - name: Build APK
-        working-directory: ./App
+        working-directory: ./app
         run: gradle assembleDebug --no-daemon -Djava.awt.headless=true
 
       - name: Upload APK
