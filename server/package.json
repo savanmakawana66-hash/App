@@ -1,0 +1,12 @@
+{
+  "name": "watch-party-relay-server",
+  "version": "1.0.0",
+  "description": "Signaling, Voice and Media Stream Relay Server for Android Watch Party App",
+  "main": "signaling-relay-server.js",
+  "scripts": {
+    "start": "node signaling-relay-server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

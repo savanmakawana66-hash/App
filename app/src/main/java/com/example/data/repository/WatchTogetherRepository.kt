@@ -101,6 +101,10 @@ class WatchTogetherRepository {
   private val _eventMessages = MutableSharedFlow<String>(extraBufferCapacity = 1)
   val eventMessages: SharedFlow<String> = _eventMessages.asSharedFlow()
 
+  fun postEventMessage(message: String) {
+    _eventMessages.tryEmit(message)
+  }
+
   // Anti-farming trackers
   private var lastChatMessageTime = 0L
   private var lastVoiceXpAwardTime = 0L
@@ -111,121 +115,13 @@ class WatchTogetherRepository {
   }
 
   private fun seedInitialData() {
-    val seedRooms = listOf(
-      Room(
-        id = "ABC7291",
-        name = "Movie Night 🍿",
-        description = "Streaming sci-fi & anime blockbusters with high-def surround sound. Grab your popcorn!",
-        roomImage = "gradient_1",
-        ownerId = "USR-10101",
-        ownerName = "Alex Rivera",
-        isPrivate = false,
-        roomXp = 7850,
-        roomLevel = 2,
-        videoControlMode = VideoControlMode.ADMINS_ONLY,
-        category = RoomCategory.WATCH_TOGETHER,
-        audienceCount = 14,
-        isFavourite = true,
-        activeVideoTitle = "Cyberpunk: Edgerunners Ep. 1",
-        activeVideoDurationSec = 1420,
-        activeVideoPosSec = 345f,
-        isVideoPlaying = true
-      ),
-      Room(
-        id = "LOFI882",
-        name = "EDM Chill & Lo-Fi Lounge 🎧",
-        description = "24/7 synchronized synthwave, lo-fi beats, and study chill room. Chill voice chat on.",
-        roomImage = "gradient_2",
-        ownerId = "USR-20202",
-        ownerName = "DJ Spark",
-        isPrivate = false,
-        roomXp = 18400,
-        roomLevel = 3,
-        videoControlMode = VideoControlMode.EVERYONE,
-        category = RoomCategory.VOICE,
-        audienceCount = 28,
-        isFavourite = false,
-        activeVideoTitle = "Lofi Hip Hop Radio - Beats to Relax/Study to",
-        activeVideoDurationSec = 3600,
-        activeVideoPosSec = 820f,
-        isVideoPlaying = true
-      ),
-      Room(
-        id = "ANM5510",
-        name = "Anime Watch Party ⚔️",
-        description = "Private squad for new season weekly drops. Password protected room.",
-        roomImage = "gradient_3",
-        ownerId = "USR-30303",
-        ownerName = "SakuraKun",
-        isPrivate = true,
-        password = "anime",
-        roomXp = 2100,
-        roomLevel = 1,
-        videoControlMode = VideoControlMode.OWNER_ONLY,
-        category = RoomCategory.POPULAR,
-        audienceCount = 6,
-        isFavourite = true,
-        activeVideoTitle = "Demon Slayer Season 4 Special",
-        activeVideoDurationSec = 1800,
-        activeVideoPosSec = 120f,
-        isVideoPlaying = false
-      ),
-      Room(
-        id = "DEV4040",
-        name = "Coding & Tech Docs Stream 💻",
-        description = "Collaborative learning, Android Jetpack Compose tutorials, and tech documentaries.",
-        roomImage = "gradient_4",
-        ownerId = "USR-40404",
-        ownerName = "CodeMaster",
-        isPrivate = false,
-        roomXp = 6200,
-        roomLevel = 2,
-        videoControlMode = VideoControlMode.ADMINS_ONLY,
-        category = RoomCategory.NEW,
-        audienceCount = 9,
-        activeVideoTitle = "Kotlin Coroutines & Flow Deep Dive",
-        activeVideoDurationSec = 2400,
-        activeVideoPosSec = 450f,
-        isVideoPlaying = true
-      ),
-      Room(
-        id = "CLS9901",
-        name = "Classic Cinema Club 🎬",
-        description = "Restored 4K masterpieces, noir classics, and director commentaries.",
-        roomImage = "gradient_5",
-        ownerId = "USR-50505",
-        ownerName = "CinemaBuff",
-        isPrivate = false,
-        roomXp = 32000,
-        roomLevel = 4,
-        videoControlMode = VideoControlMode.ADMINS_ONLY,
-        category = RoomCategory.ACTIVE,
-        audienceCount = 35,
-        activeVideoTitle = "Metropolis (1927) Restored Edition",
-        activeVideoDurationSec = 9000,
-        activeVideoPosSec = 1200f,
-        isVideoPlaying = true
-      )
-    )
-    _rooms.value = seedRooms
+    // Only real, active rooms created by connected hosts are shown.
+    // Strictly no fake, sample, demo, placeholder, or hardcoded rooms.
+    _rooms.value = emptyList()
 
-    // Seed Admins for ABC7291
-    _roomAdmins.value = mapOf(
-      "ABC7291" to listOf(
-        RoomAdmin(
-          userId = "USR-10102",
-          username = "Elena_V",
-          permissions = AdminPermission()
-        ),
-        RoomAdmin(
-          userId = "USR-10103",
-          username = "MarcusK",
-          permissions = AdminPermission(canLockRoom = false, canBanMember = false)
-        )
-      )
-    )
+    _roomAdmins.value = emptyMap()
 
-    // Seed Friends
+    // Seed Friends (without referencing nonexistent fake rooms)
     val seedFriends = listOf(
       Friend(
         userId = "USR-10102",
@@ -233,10 +129,10 @@ class WatchTogetherRepository {
         avatar = "avatar_2",
         bio = "Sci-fi nerd, animator & synth lover 🚀",
         isOnline = true,
-        statusEmoji = "🎬",
-        statusText = "Watching Movie Night",
-        inRoomId = "ABC7291",
-        inRoomName = "Movie Night 🍿",
+        statusEmoji = "🟢",
+        statusText = "Online",
+        inRoomId = null,
+        inRoomName = null,
         friendshipStatus = FriendshipStatus.ACCEPTED
       ),
       Friend(
@@ -246,9 +142,9 @@ class WatchTogetherRepository {
         bio = "Film student & cinephile 📽️",
         isOnline = true,
         statusEmoji = "🎧",
-        statusText = "Listening",
-        inRoomId = "ABC7291",
-        inRoomName = "Movie Night 🍿",
+        statusText = "Listening to music",
+        inRoomId = null,
+        inRoomName = null,
         friendshipStatus = FriendshipStatus.ACCEPTED
       ),
       Friend(
@@ -259,8 +155,8 @@ class WatchTogetherRepository {
         isOnline = true,
         statusEmoji = "🎮",
         statusText = "Gaming",
-        inRoomId = "LOFI882",
-        inRoomName = "EDM Chill & Lo-Fi Lounge 🎧",
+        inRoomId = null,
+        inRoomName = null,
         friendshipStatus = FriendshipStatus.ACCEPTED
       ),
       Friend(
@@ -293,18 +189,8 @@ class WatchTogetherRepository {
           id = UUID.randomUUID().toString(),
           senderId = "USR-10102",
           receiverId = _currentUser.value.id,
-          text = "Hey! We are watching the new Edgerunners episode in Movie Night!",
+          text = "Hey! Let me know when you start a Watch Party room!",
           timestamp = System.currentTimeMillis() - 1000 * 60 * 15
-        ),
-        DirectMessage(
-          id = UUID.randomUUID().toString(),
-          senderId = "USR-10102",
-          receiverId = _currentUser.value.id,
-          text = "Join us right here:",
-          timestamp = System.currentTimeMillis() - 1000 * 60 * 14,
-          isRoomInvite = true,
-          invitedRoomId = "ABC7291",
-          invitedRoomName = "Movie Night 🍿"
         )
       ),
       "USR-20202" to listOf(
@@ -312,7 +198,7 @@ class WatchTogetherRepository {
           id = UUID.randomUUID().toString(),
           senderId = "USR-20202",
           receiverId = _currentUser.value.id,
-          text = "New lo-fi playlist just dropped! Jump in when you have time 🎶",
+          text = "Ready to stream and sync whenever you are! 🎶",
           timestamp = System.currentTimeMillis() - 1000 * 60 * 120
         )
       )
@@ -324,29 +210,11 @@ class WatchTogetherRepository {
       NotificationItem(
         id = UUID.randomUUID().toString(),
         userId = _currentUser.value.id,
-        type = NotificationType.ROOM_INVITE,
-        title = "Room Invitation",
-        message = "Elena_V invited you to join 'Movie Night 🍿' (ABC7291)",
-        timestamp = System.currentTimeMillis() - 1000 * 60 * 14,
-        actionRoomId = "ABC7291"
-      ),
-      NotificationItem(
-        id = UUID.randomUUID().toString(),
-        userId = _currentUser.value.id,
         type = NotificationType.FRIEND_REQUEST,
         title = "New Friend Request",
         message = "Vikram_99 sent you a friend request",
         timestamp = System.currentTimeMillis() - 1000 * 60 * 60,
         actionUserId = "USR-88888"
-      ),
-      NotificationItem(
-        id = UUID.randomUUID().toString(),
-        userId = _currentUser.value.id,
-        type = NotificationType.ROOM_LEVEL_UP,
-        title = "Room Leveled Up!",
-        message = "Room 'Movie Night 🍿' reached Level 2! 4 Admin slots now unlocked.",
-        timestamp = System.currentTimeMillis() - 1000 * 60 * 60 * 5,
-        actionRoomId = "ABC7291"
       ),
       NotificationItem(
         id = UUID.randomUUID().toString(),
@@ -495,6 +363,14 @@ class WatchTogetherRepository {
   // ROOM JOINING, 8-SEATS & AUDIENCE MODE
   // -------------------------------------------------------------
   fun joinRoom(roomId: String, passwordAttempt: String = ""): Boolean {
+    // Validate with real-time active session backend
+    val validation = com.example.network.ActiveRoomSessionManager.validateJoin(roomId.trim(), passwordAttempt)
+    if (validation.isFailure) {
+      val errorMsg = validation.exceptionOrNull()?.message ?: "Cannot join: Room is no longer active."
+      _eventMessages.tryEmit(errorMsg)
+      return false
+    }
+
     val targetRoom = _rooms.value.find { it.id.equals(roomId.trim(), ignoreCase = true) }
     if (targetRoom == null) {
       _eventMessages.tryEmit("Room not found with ID $roomId")
@@ -520,7 +396,7 @@ class WatchTogetherRepository {
     val isUserOwner = targetRoom.ownerId == _currentUser.value.id
     val isUserAdmin = admins.any { it.userId == _currentUser.value.id }
 
-    // Seed 8 voice seats: Seat 0 has Owner or user
+    // Seed 8 voice seats: Seat 0 has Owner
     val initialSeats = mutableListOf<RoomSeat>()
 
     if (isUserOwner) {
@@ -531,29 +407,10 @@ class WatchTogetherRepository {
           username = _currentUser.value.username,
           avatar = _currentUser.value.avatar,
           isOwner = true,
-          isAdmin = false
-        )
-      )
-      // Fill some other seats
-      initialSeats.add(
-        RoomSeat(
-          seatIndex = 1,
-          userId = "USR-10102",
-          username = "Elena_V",
-          avatar = "avatar_2",
           isAdmin = true
         )
       )
-      initialSeats.add(
-        RoomSeat(
-          seatIndex = 2,
-          userId = "USR-10103",
-          username = "MarcusK",
-          avatar = "avatar_3",
-          isAdmin = true
-        )
-      )
-      for (i in 3..7) {
+      for (i in 1..7) {
         initialSeats.add(RoomSeat(seatIndex = i))
       }
     } else {
@@ -568,34 +425,18 @@ class WatchTogetherRepository {
           isAdmin = false
         )
       )
-      // Pre-fill seats 1-7. If room is ABC7291, let's prefill all 8 seats to demonstrate Audience Mode!
-      if (targetRoom.id == "ABC7291") {
-        for (i in 1..7) {
-          initialSeats.add(
-            RoomSeat(
-              seatIndex = i,
-              userId = "USR-BOT-$i",
-              username = listOf("Kai_88", "Elena_V", "MarcusK", "Zoe_Moon", "Aarav_P", "NeoX", "Zara_K")[i - 1],
-              avatar = "avatar_${(i % 5) + 1}",
-              isMuted = i % 2 == 0,
-              isSpeaking = i == 1
-            )
-          )
-        }
-      } else {
-        // Seat user in seat 1 if available
-        initialSeats.add(
-          RoomSeat(
-            seatIndex = 1,
-            userId = _currentUser.value.id,
-            username = _currentUser.value.username,
-            avatar = _currentUser.value.avatar,
-            isAdmin = isUserAdmin
-          )
+      // Seat user in seat 1 if available
+      initialSeats.add(
+        RoomSeat(
+          seatIndex = 1,
+          userId = _currentUser.value.id,
+          username = _currentUser.value.username,
+          avatar = _currentUser.value.avatar,
+          isAdmin = isUserAdmin
         )
-        for (i in 2..7) {
-          initialSeats.add(RoomSeat(seatIndex = i))
-        }
+      )
+      for (i in 2..7) {
+        initialSeats.add(RoomSeat(seatIndex = i))
       }
     }
     _roomSeats.value = initialSeats
@@ -618,7 +459,7 @@ class WatchTogetherRepository {
       _eventMessages.tryEmit("Joined room: ${targetRoom.name}")
     }
 
-    // Seed chat
+    // Clean initial chat
     _roomChatMessages.value = listOf(
       ChatMessage(
         id = UUID.randomUUID().toString(),
@@ -628,25 +469,13 @@ class WatchTogetherRepository {
         senderRole = "SYSTEM",
         text = "Welcome to ${targetRoom.name}! ${targetRoom.welcomeMessage}",
         isSystem = true
-      ),
-      ChatMessage(
-        id = UUID.randomUUID().toString(),
-        roomId = targetRoom.id,
-        senderId = targetRoom.ownerId,
-        senderName = targetRoom.ownerName,
-        senderRole = "OWNER",
-        text = "Hey everyone! Sound check: can you hear the synchronized audio clearly?",
-        timestamp = System.currentTimeMillis() - 1000 * 60 * 3
-      ),
-      ChatMessage(
-        id = UUID.randomUUID().toString(),
-        roomId = targetRoom.id,
-        senderId = "USR-10102",
-        senderName = "Elena_V",
-        senderRole = "ADMIN",
-        text = "Audio is crystal clear! Sync delay is only 14ms.",
-        timestamp = System.currentTimeMillis() - 1000 * 60 * 2
       )
+    )
+
+    // Update session participant count in active registry
+    com.example.network.ActiveRoomSessionManager.updateParticipantCount(
+      targetRoom.id,
+      initialSeats.count { it.userId != null } + _audienceMembers.value.size
     )
 
     // Award Room XP for joining
@@ -656,6 +485,13 @@ class WatchTogetherRepository {
 
   fun leaveRoom() {
     _currentActiveRoom.value?.let { room ->
+      if (room.ownerId == _currentUser.value.id) {
+        // Host leaving closes the session
+        com.example.network.ActiveRoomSessionManager.closeSession(room.id)
+      } else {
+        val remaining = (_roomSeats.value.count { it.userId != null } + _audienceMembers.value.size - 1).coerceAtLeast(1)
+        com.example.network.ActiveRoomSessionManager.updateParticipantCount(room.id, remaining)
+      }
       // Remove from seat
       _roomSeats.update { seats ->
         seats.map {
@@ -994,6 +830,32 @@ class WatchTogetherRepository {
     )
 
     _rooms.update { listOf(newRoom) + it }
+
+    // Register with real-time active session backend
+    com.example.network.ActiveRoomSessionManager.createSession(
+      com.example.data.model.ActiveRoomSession(
+        roomId = newId,
+        name = newRoom.name,
+        hostId = user.id,
+        hostName = user.username,
+        isHostConnected = true,
+        connectionState = com.example.data.model.PartyConnectionState.CONNECTED,
+        participantCount = 1,
+        isPlaying = newRoom.isVideoPlaying,
+        currentPositionSec = newRoom.activeVideoPosSec,
+        durationSec = newRoom.activeVideoDurationSec,
+        mediaTitle = newRoom.activeVideoTitle,
+        mediaType = if (category == RoomCategory.VOICE) com.example.data.model.StreamMediaType.AUDIO else com.example.data.model.StreamMediaType.VIDEO,
+        currentQuality = com.example.data.model.StreamQuality.HIGH_ORIGINAL,
+        isPrivate = isPrivate,
+        password = password,
+        createdAtMs = System.currentTimeMillis(),
+        lastHeartbeatMs = System.currentTimeMillis(),
+        isClosed = false,
+        streamUrl = ""
+      )
+    )
+
     addPersonalXp(300, "Created Permanent Room")
     _eventMessages.tryEmit("Permanent Room '$name' (ID: $newId) created successfully! 👑")
     return newRoom
@@ -1007,6 +869,7 @@ class WatchTogetherRepository {
       return false
     }
     _rooms.update { it.filterNot { r -> r.id == roomId } }
+    com.example.network.ActiveRoomSessionManager.closeSession(roomId)
     if (_currentActiveRoom.value?.id == roomId) {
       leaveRoom()
     }

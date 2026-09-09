@@ -33,6 +33,7 @@ import com.example.ui.screens.room.RoomDetailScreen
 import com.example.ui.screens.room.RoomListScreen
 import com.example.ui.screens.settings.GlobalAdminScreen
 import com.example.ui.screens.settings.SettingsScreen
+import com.example.ui.screens.watchparty.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.BottomNavTab
 import com.example.ui.viewmodel.MainViewModel
@@ -89,6 +90,12 @@ fun WatchTogetherApp(
   val showQrShareDialog by viewModel.showQrShareDialog.collectAsState()
   val reportTarget by viewModel.reportTarget.collectAsState()
 
+  // Watch Party States
+  val activeWatchParty by viewModel.activeWatchParty.collectAsState()
+  val activeRoomSessions by viewModel.activeRoomSessions.collectAsState()
+  val showHostWatchPartyDialog by viewModel.showHostWatchPartyDialog.collectAsState()
+  val showJoinWatchPartyDialog by viewModel.showJoinWatchPartyDialog.collectAsState()
+
   // Audio permission launcher
   val audioPermissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestPermission()
@@ -110,6 +117,15 @@ fun WatchTogetherApp(
   Box(modifier = Modifier.fillMaxSize()) {
     // Top-Level Screen Routing
     when {
+      // 0. Active Watch Party & Voice Room (Local Media Streaming to Remote Friends)
+      activeWatchParty != null -> {
+        WatchPartyStageScreen(
+          engine = viewModel.networkEngine,
+          party = activeWatchParty!!,
+          onLeave = { viewModel.leaveWatchParty() }
+        )
+      }
+
       // 1. In-Room View (Synchronized 8-Seat Watch Party Room)
       currentActiveRoom != null -> {
         RoomDetailScreen(
@@ -302,6 +318,7 @@ fun WatchTogetherApp(
               BottomNavTab.ROOM -> {
                 RoomListScreen(
                   currentUser = currentUser,
+                  activeRoomSessions = activeRoomSessions,
                   rooms = filteredRooms,
                   searchQuery = searchQuery,
                   selectedCategory = selectedCategory,
@@ -310,7 +327,10 @@ fun WatchTogetherApp(
                   onSelectCategory = { c -> viewModel.selectCategory(c) },
                   onCreateRoomClick = { viewModel.openCreateRoomDialog() },
                   onJoinRoomClick = { viewModel.openJoinRoomDialog() },
+                  onHostWatchPartyClick = { viewModel.openHostWatchParty() },
+                  onJoinWatchPartyClick = { viewModel.openJoinWatchParty() },
                   onRoomClick = { rId -> viewModel.joinRoom(rId) },
+                  onActiveRoomSessionClick = { session -> viewModel.joinActiveRoomSession(session) },
                   onToggleFavourite = { rId -> viewModel.toggleFavourite(rId) },
                   onOpenNotifications = { viewModel.openNotifications() },
                   onVerifyGuestClick = { viewModel.openOtpDialog() }
@@ -384,6 +404,30 @@ fun WatchTogetherApp(
           if (!success) {
             Toast.makeText(context, "Room not found or incorrect password", Toast.LENGTH_SHORT).show()
           }
+        }
+      )
+    }
+
+    // Host Watch Party Modal (Pick local video/music & stream over Internet)
+    if (showHostWatchPartyDialog) {
+      HostWatchPartyDialog(
+        engine = viewModel.networkEngine,
+        onDismiss = { viewModel.closeHostWatchParty() },
+        onStartParty = { media, quality, roomName, password ->
+          audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+          viewModel.startHostWatchParty(media, quality, roomName, password)
+        }
+      )
+    }
+
+    // Join Watch Party Modal (Enter Room Code to watch Host's stream)
+    if (showJoinWatchPartyDialog) {
+      JoinWatchPartyDialog(
+        engine = viewModel.networkEngine,
+        onDismiss = { viewModel.closeJoinWatchParty() },
+        onJoinSuccess = {
+          audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+          viewModel.closeJoinWatchParty()
         }
       )
     }

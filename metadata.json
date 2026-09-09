@@ -1,6 +1,6 @@
 {
   "name": "Watch Together",
-  "description": "Modern social watch-together app with synchronized permanent rooms, 8-seat voice rooms, audience mode, chat, and friend DMs.",
+  "description": "Watch Party + Voice Room app enabling hosts to stream local phone video and music to remote friends in real-time over the Internet without downloading files, with synchronized playback, live voice chat, and quality options.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

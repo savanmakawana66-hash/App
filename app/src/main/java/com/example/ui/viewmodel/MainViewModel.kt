@@ -1,9 +1,11 @@
 package com.example.ui.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.*
 import com.example.data.repository.WatchTogetherRepository
+import com.example.network.WatchPartyNetworkEngine
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -13,9 +15,22 @@ enum class BottomNavTab {
   PROFILE
 }
 
-class MainViewModel(
+class MainViewModel @JvmOverloads constructor(
+  application: Application,
   private val repository: WatchTogetherRepository = WatchTogetherRepository()
-) : ViewModel() {
+) : AndroidViewModel(application) {
+
+  // Watch Party Engine (Host file streaming & Voice Room)
+  val networkEngine = WatchPartyNetworkEngine(application) { currentUser.value }
+  val activeWatchParty = networkEngine.activeParty
+
+  init {
+    viewModelScope.launch {
+      networkEngine.eventToast.collect { msg ->
+        repository.postEventMessage(msg)
+      }
+    }
+  }
 
   // Primary bottom navigation: EXACTLY 3 sections: 1. ROOM, 2. DM, 3. PROFILE
   private val _currentTab = MutableStateFlow(BottomNavTab.ROOM)
@@ -77,6 +92,19 @@ class MainViewModel(
     }
   }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+  // Strictly real-time Active Room Sessions from backend
+  val activeRoomSessions: StateFlow<List<ActiveRoomSession>> = combine(
+    com.example.network.ActiveRoomSessionManager.activeRooms,
+    searchQuery
+  ) { list, query ->
+    if (query.isBlank()) list
+    else list.filter {
+      it.name.contains(query, ignoreCase = true) ||
+          it.roomId.contains(query, ignoreCase = true) ||
+          it.hostName.contains(query, ignoreCase = true)
+    }
+  }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
   // Active DM chat thread with a friend
   private val _activeChatFriend = MutableStateFlow<Friend?>(null)
   val activeChatFriend: StateFlow<Friend?> = _activeChatFriend.asStateFlow()
@@ -119,6 +147,13 @@ class MainViewModel(
   private val _showQrShareDialog = MutableStateFlow(false)
   val showQrShareDialog: StateFlow<Boolean> = _showQrShareDialog.asStateFlow()
 
+  // Watch Party Dialog States
+  private val _showHostWatchPartyDialog = MutableStateFlow(false)
+  val showHostWatchPartyDialog: StateFlow<Boolean> = _showHostWatchPartyDialog.asStateFlow()
+
+  private val _showJoinWatchPartyDialog = MutableStateFlow(false)
+  val showJoinWatchPartyDialog: StateFlow<Boolean> = _showJoinWatchPartyDialog.asStateFlow()
+
   private val _reportTarget = MutableStateFlow<Pair<String, String>?>(null) // (type, id+name)
   val reportTarget: StateFlow<Pair<String, String>?> = _reportTarget.asStateFlow()
 
@@ -159,17 +194,18 @@ class MainViewModel(
   fun closeCreateRoomDialog() { _showCreateRoomDialog.value = false }
   fun createRoom(
     name: String,
-    description: String,
-    isPrivate: Boolean,
-    password: String,
-    welcome: String,
-    rules: String,
-    category: RoomCategory
-  ) {
+    description: String = "",
+    isPrivate: Boolean = false,
+    password: String = "",
+    welcome: String = "Welcome!",
+    rules: String = "Be respectful",
+    category: RoomCategory = RoomCategory.WATCH_TOGETHER
+  ): Room {
     val room = repository.createRoom(name, description, isPrivate, password, welcome, rules, category)
     _showCreateRoomDialog.value = false
     // Join newly created room
     joinRoom(room.id)
+    return room
   }
 
   fun openJoinRoomDialog() { _showJoinRoomDialog.value = true }
@@ -185,6 +221,55 @@ class MainViewModel(
   fun leaveRoom() { repository.leaveRoom() }
   fun deleteRoom(roomId: String) { repository.deleteRoom(roomId) }
   fun toggleFavourite(roomId: String) { repository.toggleFavouriteRoom(roomId) }
+
+  // Watch Party Actions (Host & Friend Streaming Mode)
+  fun openHostWatchParty() { _showHostWatchPartyDialog.value = true }
+  fun closeHostWatchParty() { _showHostWatchPartyDialog.value = false }
+  fun openJoinWatchParty() { _showJoinWatchPartyDialog.value = true }
+  fun closeJoinWatchParty() { _showJoinWatchPartyDialog.value = false }
+
+  fun startHostWatchParty(
+    media: LocalMediaItem,
+    quality: StreamQuality,
+    roomName: String,
+    password: String = ""
+  ) {
+    networkEngine.startHostParty(media, quality, roomName, password)
+    _showHostWatchPartyDialog.value = false
+  }
+
+  fun joinWatchParty(code: String, password: String = ""): Boolean {
+    val success = networkEngine.joinPartyByCode(code, password)
+    if (success) {
+      _showJoinWatchPartyDialog.value = false
+    }
+    return success
+  }
+
+  fun joinActiveRoomSession(session: ActiveRoomSession, passwordAttempt: String = ""): Boolean {
+    val validation = com.example.network.ActiveRoomSessionManager.validateJoin(session.roomId, passwordAttempt)
+    if (validation.isFailure) {
+      val errorMsg = validation.exceptionOrNull()?.message ?: "Cannot join: Room is no longer active."
+      repository.postEventMessage(errorMsg)
+      return false
+    }
+
+    // Try joining as watch party first if registered
+    if (com.example.network.WatchPartyNetworkEngine.registeredParties.containsKey(session.roomId)) {
+      val success = networkEngine.joinPartyByCode(session.roomId, passwordAttempt)
+      if (success) {
+        _showJoinWatchPartyDialog.value = false
+      }
+      return success
+    }
+
+    // Otherwise join in repository
+    return repository.joinRoom(session.roomId, passwordAttempt)
+  }
+
+  fun leaveWatchParty() {
+    networkEngine.leaveParty()
+  }
 
   // Voice Seat Actions
   fun takeSeat(seatIndex: Int) { repository.takeSeat(seatIndex) }
