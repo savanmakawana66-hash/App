@@ -86,13 +86,15 @@ class LocalMediaServer(private val context: Context) {
     }
   }
 
-  fun getStreamUrl(): String {
-    return "http://127.0.0.1:$serverPort/stream"
+  fun getStreamUrl(userId: String = "local_host", roomId: String = "default_room"): String {
+    val token = com.example.network.security.BackendSecurityController.generateSignedMediaToken(userId, roomId)
+    return "http://127.0.0.1:$serverPort/stream?token=$token&room=$roomId"
   }
 
-  fun getLanStreamUrl(): String {
+  fun getLanStreamUrl(userId: String = "local_host", roomId: String = "default_room"): String {
     val ip = getLocalIpAddress() ?: "127.0.0.1"
-    return "http://$ip:$serverPort/stream"
+    val token = com.example.network.security.BackendSecurityController.generateSignedMediaToken(userId, roomId)
+    return "http://$ip:$serverPort/stream?token=$token&room=$roomId"
   }
 
   private fun handleClientConnection(client: Socket) {
@@ -107,6 +109,22 @@ class LocalMediaServer(private val context: Context) {
 
       val method = parts[0]
       val path = parts[1]
+
+      // Enforce signed media stream token authentication
+      val query = path.substringAfter("?", "")
+      val queryMap = query.split("&").associate {
+        val param = it.split("=")
+        if (param.size == 2) param[0] to param[1] else param[0] to ""
+      }
+      val token = queryMap["token"]
+      val roomId = queryMap["room"].orEmpty()
+
+      if (!com.example.network.security.BackendSecurityController.validateMediaToken(token, roomId)) {
+        val forbidden = "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n403 Forbidden: Valid media streaming authorization token required.\r\n"
+        outputStream.write(forbidden.toByteArray(Charsets.UTF_8))
+        outputStream.flush()
+        return
+      }
 
       var rangeStart: Long = 0
       var rangeEnd: Long = -1
@@ -176,6 +194,7 @@ class LocalMediaServer(private val context: Context) {
 
     // Stream the content chunk by chunk (64KB buffer)
     val chunkDelayMs = when (currentQuality) {
+      StreamQuality.AUTO -> 15L
       StreamQuality.LOW -> 80L
       StreamQuality.MEDIUM -> 25L
       StreamQuality.HIGH_ORIGINAL -> 0L

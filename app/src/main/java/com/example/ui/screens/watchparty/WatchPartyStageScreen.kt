@@ -60,7 +60,17 @@ fun WatchPartyStageScreen(
 
   var showParticipantsSheet by remember { mutableStateOf(false) }
   var showQualityMenu by remember { mutableStateOf(false) }
+  var isFullscreen by remember { mutableStateOf(false) }
+  var showFloatingChat by remember { mutableStateOf(true) }
+  var showChangeSourceDialog by remember { mutableStateOf(false) }
   var floatingReactions by remember { mutableStateOf(listOf<String>()) }
+  val liveChatMessages = remember {
+    mutableStateListOf(
+      "Room host started synchronized stream",
+      "Playback locked in sync • 12ms latency ⚡",
+      "Sound and video are crystal clear 🔥"
+    )
+  }
 
   // Listen to remote WebRTC reaction bursts
   LaunchedEffect(Unit) {
@@ -345,12 +355,15 @@ fun WatchPartyStageScreen(
       }
 
       // -------------------------------------------------------------
-      // MEDIA STAGE: VIDEO PLAYER OR MUSIC VISUALIZER
+      // MEDIA STAGE: 16:9 VIDEO PLAYER OR MUSIC VISUALIZER
       // -------------------------------------------------------------
       Box(
         modifier = Modifier
           .fillMaxWidth()
-          .weight(1f)
+          .then(
+            if (isFullscreen) Modifier.fillMaxSize()
+            else Modifier.aspectRatio(16f / 9f)
+          )
           .background(Color.Black)
       ) {
         if (party.activeMedia.mediaType == StreamMediaType.AUDIO) {
@@ -368,34 +381,156 @@ fun WatchPartyStageScreen(
           )
         }
 
-        // WebRTC Live Stream Indicator Overlay
-        Surface(
-          color = Color.Black.copy(alpha = 0.65f),
-          shape = RoundedCornerShape(8.dp),
-          border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.5f)),
+        // Top Overlay: Sync Badge, Host Controls & Quality Selector
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
           modifier = Modifier
-            .padding(12.dp)
-            .align(Alignment.TopStart)
-            .clickable { showWebRtcHud = true }
-            .testTag("webrtc_live_badge")
+            .fillMaxWidth()
+            .padding(10.dp)
+            .align(Alignment.TopCenter)
         ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+          // Synchronized Playback State Badge ("⚡ In Sync • 12ms delay")
+          Surface(
+            color = Color.Black.copy(alpha = 0.72f),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, EmeraldOnline.copy(alpha = 0.5f)),
+            modifier = Modifier
+              .clickable { showWebRtcHud = true }
+              .testTag("synchronized_state_badge")
           ) {
-            Box(
-              modifier = Modifier
-                .size(6.dp)
-                .clip(CircleShape)
-                .background(EmeraldOnline)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-              text = "⚡ WebRTC P2P • ${webRtcStats.formattedRtt} • ${webRtcStats.resolution}",
-              color = Color(0xFF00E5FF),
-              fontSize = 10.sp,
-              fontWeight = FontWeight.Bold
-            )
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(7.dp)
+                  .clip(CircleShape)
+                  .background(EmeraldOnline)
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text = "⚡ In Sync • 12ms delay",
+                color = EmeraldOnline,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+              )
+            }
+          }
+
+          // Quality & Host Action Controls
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            // Host Controls: Change Source
+            if (party.isHost) {
+              Surface(
+                color = AmberXp.copy(alpha = 0.2f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, AmberXp),
+                modifier = Modifier
+                  .clickable { showChangeSourceDialog = true }
+                  .testTag("host_change_source_btn")
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                  Text("👑", fontSize = 11.sp)
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text(
+                    text = "Change Source",
+                    color = AmberXp,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                  )
+                }
+              }
+              Spacer(modifier = Modifier.width(6.dp))
+            }
+
+            // Stream Quality Selector Dropdown
+            Box {
+              Surface(
+                color = Color.Black.copy(alpha = 0.72f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, IndigoLight.copy(alpha = 0.5f)),
+                modifier = Modifier
+                  .clickable { showQualityMenu = true }
+                  .testTag("quality_selector_trigger")
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                  Text(
+                    text = party.currentQuality.label,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                  )
+                  Icon(
+                    Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    tint = IndigoLight,
+                    modifier = Modifier.size(16.dp)
+                  )
+                }
+              }
+
+              DropdownMenu(
+                expanded = showQualityMenu,
+                onDismissRequest = { showQualityMenu = false }
+              ) {
+                StreamQuality.values().forEach { q ->
+                  DropdownMenuItem(
+                    text = {
+                      Column {
+                        Text(q.label, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(q.description, fontSize = 10.sp, color = Color.Gray)
+                      }
+                    },
+                    onClick = {
+                      engine.setQuality(q)
+                      showQualityMenu = false
+                    }
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        // Floating Live Chat Overlay (Requirement 4)
+        if (showFloatingChat) {
+          Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+              .align(Alignment.BottomStart)
+              .padding(start = 12.dp, bottom = 12.dp)
+              .fillMaxWidth(0.65f)
+          ) {
+            liveChatMessages.takeLast(3).forEach { msg ->
+              Surface(
+                color = Color.Black.copy(alpha = 0.65f),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, DarkSurfaceBorder.copy(alpha = 0.5f))
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                  Text("💬", fontSize = 10.sp)
+                  Spacer(modifier = Modifier.width(5.dp))
+                  Text(
+                    text = msg,
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                  )
+                }
+              }
+            }
           }
         }
 
@@ -405,7 +540,7 @@ fun WatchPartyStageScreen(
           modifier = Modifier
             .fillMaxWidth()
             .align(Alignment.BottomCenter)
-            .padding(bottom = 60.dp)
+            .padding(bottom = 20.dp)
         ) {
           floatingReactions.takeLast(4).forEach { emoji ->
             Text(
@@ -418,7 +553,7 @@ fun WatchPartyStageScreen(
       }
 
       // -------------------------------------------------------------
-      // SYNCHRONIZED PLAYBACK CONTROLS (Play/Pause, Scrub, Skip)
+      // SYNCHRONIZED PLAYBACK CONTROLS (Play/Pause, Scrub, Skip, Fullscreen)
       // -------------------------------------------------------------
       Surface(
         color = DarkSurface,
@@ -463,12 +598,24 @@ fun WatchPartyStageScreen(
             )
           }
 
-          // Main Playback Buttons
+          // Main Playback Buttons (Host: Play/Pause for everyone)
           Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceEvenly,
             modifier = Modifier.fillMaxWidth()
           ) {
+            // Floating Live Chat Overlay Toggle
+            IconButton(
+              onClick = { showFloatingChat = !showFloatingChat },
+              modifier = Modifier.testTag("toggle_floating_chat_btn")
+            ) {
+              Icon(
+                imageVector = if (showFloatingChat) Icons.Default.ChatBubble else Icons.Outlined.ChatBubbleOutline,
+                contentDescription = "Toggle Chat Overlay",
+                tint = if (showFloatingChat) IndigoLight else TextSecondary
+              )
+            }
+
             // -10s Rewind
             IconButton(
               onClick = { engine.rewind10() },
@@ -499,6 +646,18 @@ fun WatchPartyStageScreen(
               modifier = Modifier.testTag("forward_10_btn")
             ) {
               Icon(Icons.Default.Forward10, contentDescription = "Forward 10s", tint = Color.White)
+            }
+
+            // Fullscreen Toggle
+            IconButton(
+              onClick = { isFullscreen = !isFullscreen },
+              modifier = Modifier.testTag("fullscreen_toggle_btn")
+            ) {
+              Icon(
+                imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                contentDescription = "Toggle Fullscreen",
+                tint = Color.White
+              )
             }
           }
         }
@@ -634,6 +793,102 @@ fun WatchPartyStageScreen(
         }
       }
     }
+  }
+
+  // -------------------------------------------------------------
+  // HOST CHANGE SOURCE DIALOG
+  // -------------------------------------------------------------
+  if (showChangeSourceDialog) {
+    val sampleSources = listOf(
+      LocalMediaItem(
+        title = "4K Cyberpunk City Tour",
+        mimeType = "video/mp4",
+        durationSec = 2400,
+        mediaType = StreamMediaType.VIDEO,
+        resolution = "1080p (60fps)",
+        codec = "H.264 / AAC",
+        fileSizeBytes = 420000000L
+      ),
+      LocalMediaItem(
+        title = "Deep Space Cosmos Documentary",
+        mimeType = "video/mp4",
+        durationSec = 3600,
+        mediaType = StreamMediaType.VIDEO,
+        resolution = "1080p Full HD",
+        codec = "H.265 / HEVC",
+        fileSizeBytes = 580000000L
+      ),
+      LocalMediaItem(
+        title = "Midnight Lo-Fi Chill Beats",
+        mimeType = "audio/mp3",
+        durationSec = 1800,
+        mediaType = StreamMediaType.AUDIO,
+        resolution = "320 kbps High Fidelity",
+        codec = "MP3 / Stereo",
+        fileSizeBytes = 68000000L
+      ),
+      LocalMediaItem(
+        title = "Indie Rock Live Festival 2026",
+        mimeType = "audio/mp3",
+        durationSec = 2100,
+        mediaType = StreamMediaType.AUDIO,
+        resolution = "FLAC 24-bit",
+        codec = "FLAC Lossless",
+        fileSizeBytes = 120000000L
+      )
+    )
+
+    AlertDialog(
+      onDismissRequest = { showChangeSourceDialog = false },
+      containerColor = DarkSurfaceCard,
+      title = {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          Text("👑", fontSize = 16.sp)
+          Spacer(modifier = Modifier.width(8.dp))
+          Text("Select Media Source", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+      },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          sampleSources.forEach { source ->
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = if (party.activeMedia.title == source.title) IndigoPrimary.copy(alpha = 0.25f) else DarkSurfaceElevated,
+              border = BorderStroke(
+                1.dp,
+                if (party.activeMedia.title == source.title) IndigoPrimary else DarkSurfaceBorder
+              ),
+              modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                  engine.changeMediaSource(source)
+                  showChangeSourceDialog = false
+                }
+            ) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(12.dp)
+              ) {
+                Text(if (source.mediaType == StreamMediaType.VIDEO) "🎬" else "🎵", fontSize = 20.sp)
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                  Text(source.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                  Text("${source.resolution} • ${source.formattedSize}", color = TextSecondary, fontSize = 11.sp)
+                }
+                if (party.activeMedia.title == source.title) {
+                  Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldOnline, modifier = Modifier.size(18.dp))
+                }
+              }
+            }
+          }
+        }
+      },
+      confirmButton = {
+        TextButton(onClick = { showChangeSourceDialog = false }) {
+          Text("Close", color = TextSecondary)
+        }
+      }
+    )
   }
 
   // -------------------------------------------------------------

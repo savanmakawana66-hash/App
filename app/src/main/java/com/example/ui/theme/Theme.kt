@@ -7,16 +7,16 @@ import androidx.compose.runtime.Composable
 
 private val ModernDarkColorScheme =
   darkColorScheme(
-    primary = IndigoLight,
-    onPrimary = DarkBackground,
+    primary = BrandPrimary,
+    onPrimary = TextPrimary,
     primaryContainer = PurpleContainer,
     onPrimaryContainer = TextPrimary,
-    secondary = PurpleAccent,
+    secondary = CyanAccent,
     onSecondary = DarkBackground,
     secondaryContainer = DarkSurfaceElevated,
     onSecondaryContainer = TextPrimary,
-    tertiary = AmberXp,
-    onTertiary = DarkBackground,
+    tertiary = MagentaAccent,
+    onTertiary = TextPrimary,
     background = DarkBackground,
     onBackground = TextPrimary,
     surface = DarkSurface,
@@ -29,6 +29,7 @@ private val ModernDarkColorScheme =
     error = RoseError,
     onError = TextPrimary,
   )
+
 
 private val ModernLightColorScheme =
   lightColorScheme(

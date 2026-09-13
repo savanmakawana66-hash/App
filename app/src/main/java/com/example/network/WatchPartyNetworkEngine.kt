@@ -138,32 +138,6 @@ class WatchPartyNetworkEngine(
       dataUsageBytes = 0L
     )
 
-    // Seed 2 remote friends joining for lively preview
-    val friend1 = WatchPartyParticipant(
-      id = "USR-REMOTE-1",
-      username = "Elena_V",
-      avatar = "avatar_2",
-      isHost = false,
-      isSpeaking = false,
-      isMuted = false,
-      inVoice = true,
-      connectionState = PartyConnectionState.CONNECTED,
-      pingMs = 28,
-      dataUsageBytes = 1420000L
-    )
-    val friend2 = WatchPartyParticipant(
-      id = "USR-REMOTE-2",
-      username = "MarcusK",
-      avatar = "avatar_3",
-      isHost = false,
-      isSpeaking = false,
-      isMuted = true,
-      inVoice = true,
-      connectionState = PartyConnectionState.CONNECTED,
-      pingMs = 42,
-      dataUsageBytes = 1180000L
-    )
-
     val party = WatchPartyRoom(
       code = code,
       name = roomName.ifBlank { "${media.title} Watch Party" },
@@ -357,6 +331,20 @@ class WatchPartyNetworkEngine(
 
     webRtcManager.adaptQuality(quality)
     _eventToast.tryEmit("Video Quality switched to ${quality.label}")
+  }
+
+  fun changeMediaSource(newMedia: LocalMediaItem) {
+    val party = _activeParty.value ?: return
+    if (!party.isHost) return
+    val updated = party.copy(
+      activeMedia = newMedia,
+      durationSec = newMedia.durationSec,
+      positionSec = 0f,
+      isPlaying = true
+    )
+    _activeParty.value = updated
+    registeredParties[party.code] = updated
+    _eventToast.tryEmit("Changed source: ${newMedia.title}")
   }
 
   // -------------------------------------------------------------

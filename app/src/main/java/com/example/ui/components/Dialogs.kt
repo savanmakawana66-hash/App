@@ -236,6 +236,7 @@ fun OtpVerificationDialog(
 @Composable
 fun CreateRoomDialog(
   onDismiss: () -> Unit,
+  userCoins: Int = 1450,
   onCreate: (name: String, desc: String, isPrivate: Boolean, pass: String, welcome: String, rules: String, category: RoomCategory) -> Unit
 ) {
   var roomName by remember { mutableStateOf("") }
@@ -246,6 +247,7 @@ fun CreateRoomDialog(
   var rules by remember { mutableStateOf("") }
   var selectedCategory by remember { mutableStateOf(RoomCategory.WATCH_TOGETHER) }
   var errorText by remember { mutableStateOf<String?>(null) }
+  val canAfford = userCoins >= 2000
 
   Dialog(onDismissRequest = onDismiss) {
     Card(
@@ -274,7 +276,63 @@ fun CreateRoomDialog(
           color = TextSecondary
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Virtual Coin Cost Banner
+        Surface(
+          shape = RoundedCornerShape(12.dp),
+          color = if (canAfford) DarkSurfaceElevated else Color(0xFF2B1414),
+          border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (canAfford) DarkCardBorderSubtle else RoseError.copy(alpha = 0.5f)
+          ),
+          modifier = Modifier.fillMaxWidth()
+        ) {
+          Row(
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Column {
+              Text(
+                text = "Creation Cost: 2,000 🪙",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (canAfford) Color(0xFFFFD54F) else RoseError
+              )
+              Text(
+                text = "Permanent ownership • No maintenance fee",
+                fontSize = 10.sp,
+                color = TextSecondary
+              )
+            }
+            Surface(
+              shape = RoundedCornerShape(8.dp),
+              color = DarkSurface
+            ) {
+              Text(
+                text = "Bal: $userCoins 🪙",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (canAfford) Color.White else RoseError,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+              )
+            }
+          }
+        }
+
+        if (!canAfford) {
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            text = "⚠️ You need ${2000 - userCoins} more Coins. Complete Daily Tasks or participate in rooms to earn Coins.",
+            fontSize = 11.sp,
+            color = RoseError
+          )
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         OutlinedTextField(
           value = roomName,
@@ -381,15 +439,25 @@ fun CreateRoomDialog(
             onClick = {
               if (roomName.isBlank()) {
                 errorText = "Please provide a room name"
+              } else if (!canAfford) {
+                errorText = "Not enough Coins! 2,000 Coins required to create a permanent room."
               } else {
                 onCreate(roomName, description, isPrivate, password, welcomeMessage, rules, selectedCategory)
               }
             },
-            colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
+            enabled = canAfford,
+            colors = ButtonDefaults.buttonColors(
+              containerColor = if (canAfford) IndigoPrimary else DarkSurfaceElevated,
+              disabledContainerColor = DarkSurfaceElevated,
+              disabledContentColor = TextSecondary
+            ),
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier.testTag("confirm_create_room_btn")
           ) {
-            Text("Create Room", fontWeight = FontWeight.Bold)
+            Text(
+              text = if (canAfford) "Create Room (-2,000 🪙)" else "Need 2,000 🪙",
+              fontWeight = FontWeight.Bold
+            )
           }
         }
       }

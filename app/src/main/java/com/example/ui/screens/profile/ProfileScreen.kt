@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -37,6 +38,10 @@ import com.example.ui.theme.*
 fun ProfileScreen(
   currentUser: User,
   rooms: List<Room>,
+  coinWalletState: CoinWalletState = CoinWalletState(),
+  onOpenDailyTasks: () -> Unit = {},
+  onOpenCoinHistory: () -> Unit = {},
+  onAddTestBonus: (() -> Unit)? = null,
   onOpenEditProfile: () -> Unit,
   onOpenSettings: () -> Unit,
   onOpenOtpVerification: () -> Unit,
@@ -78,7 +83,7 @@ fun ProfileScreen(
             onClick = onOpenSettings,
             modifier = Modifier.testTag("settings_icon_btn")
           ) {
-            Icon(Icons.Default.Settings, contentDescription = "Settings", tint = IndigoLight)
+            Icon(Icons.Default.Settings, contentDescription = "Settings", tint = BrandVioletLight)
           }
         }
       }
@@ -98,130 +103,209 @@ fun ProfileScreen(
       item {
         Card(
           colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-          shape = RoundedCornerShape(22.dp),
-          border = androidx.compose.foundation.BorderStroke(1.dp, DarkSurfaceBorder),
+          shape = RoundedCornerShape(24.dp),
+          border = androidx.compose.foundation.BorderStroke(1.dp, DarkCardBorderSubtle),
           modifier = Modifier
             .fillMaxWidth()
             .testTag("profile_card")
         ) {
-          Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(20.dp)
-          ) {
-            ProfileFrameAvatar(
-              username = currentUser.username,
-              frame = currentUser.frameName,
-              isOnline = true,
-              size = 76.dp,
-              onClick = onOpenEditProfile
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
-              Text(
-                text = currentUser.username,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-              )
-              if (currentUser.isGuest) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Surface(
-                  color = Color(0xFF332A15),
-                  shape = RoundedCornerShape(6.dp),
-                  border = androidx.compose.foundation.BorderStroke(1.dp, AmberXp)
-                ) {
-                  Text(
-                    text = "GUEST",
-                    fontSize = 10.sp,
-                    color = AmberXp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .background(
+                Brush.verticalGradient(
+                  listOf(
+                    Color(0x288B5CF6),
+                    Color(0x10EC4899),
+                    Color.Transparent
                   )
+                )
+              )
+          ) {
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              modifier = Modifier.padding(20.dp)
+            ) {
+              ProfileFrameAvatar(
+                username = currentUser.username,
+                frame = currentUser.frameName,
+                isOnline = true,
+                size = 80.dp,
+                onClick = onOpenEditProfile
+              )
+
+              Spacer(modifier = Modifier.height(12.dp))
+
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                  text = currentUser.username,
+                  fontSize = 22.sp,
+                  fontWeight = FontWeight.ExtraBold,
+                  color = Color.White
+                )
+                if (currentUser.isGuest) {
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Surface(
+                    color = Color(0xFF332A15),
+                    shape = RoundedCornerShape(6.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AmberXp)
+                  ) {
+                    Text(
+                      text = "GUEST",
+                      fontSize = 10.sp,
+                      color = AmberXp,
+                      fontWeight = FontWeight.Bold,
+                      modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                  }
                 }
               }
-            }
 
-            // Permanent User ID + Copy Button
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              modifier = Modifier
-                .clickable {
-                  val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                  cm.setPrimaryClip(ClipData.newPlainText("User ID", currentUser.id))
-                }
-                .padding(4.dp)
-            ) {
-              Text(
-                text = "Permanent User ID: ${currentUser.id}",
-                fontSize = 12.sp,
-                color = TextSecondary,
-                fontWeight = FontWeight.SemiBold
-              )
-              Spacer(modifier = Modifier.width(4.dp))
-              Icon(
-                imageVector = Icons.Default.ContentCopy,
-                contentDescription = "Copy ID",
-                tint = IndigoLight,
-                modifier = Modifier.size(13.dp)
-              )
-            }
+              // Permanent User ID + Copy Button
+              Spacer(modifier = Modifier.height(4.dp))
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                  .clickable {
+                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("User ID", currentUser.id))
+                  }
+                  .padding(horizontal = 6.dp, vertical = 2.dp)
+              ) {
+                Text(
+                  text = "Permanent User ID: ${currentUser.id}",
+                  fontSize = 12.sp,
+                  color = TextSecondary,
+                  fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                  imageVector = Icons.Default.ContentCopy,
+                  contentDescription = "Copy ID",
+                  tint = CyanAccent,
+                  modifier = Modifier.size(13.dp)
+                )
+              }
 
-            // Status Badge
-            Spacer(modifier = Modifier.height(6.dp))
-            Surface(
-              color = DarkSurfaceElevated,
-              shape = RoundedCornerShape(12.dp)
-            ) {
-              Text(
-                text = "${currentUser.statusEmoji} ${currentUser.statusText}",
-                fontSize = 12.sp,
-                color = TextPrimary,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-              )
-            }
-
-            if (currentUser.bio.isNotBlank()) {
+              // Status Badge
               Spacer(modifier = Modifier.height(8.dp))
-              Text(
-                text = currentUser.bio,
-                fontSize = 12.sp,
-                color = TextSecondary,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-              )
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // User Level & XP
-            XPProgressBar(
-              currentXp = currentUser.xp,
-              maxThreshXp = when (currentUser.level) {
-                1 -> 1000
-                2 -> 2000
-                3 -> 4000
-                else -> 8000
+              Surface(
+                color = DarkSurfaceElevated,
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkCardBorderSubtle)
+              ) {
+                Text(
+                  text = "${currentUser.statusEmoji} ${currentUser.statusText}",
+                  fontSize = 12.sp,
+                  color = TextPrimary,
+                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
               }
-            )
 
-            Spacer(modifier = Modifier.height(14.dp))
+              if (currentUser.bio.isNotBlank()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                  text = currentUser.bio,
+                  fontSize = 12.sp,
+                  color = TextSecondary,
+                  textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+              }
 
-            // Stats row
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-              ProfileStatItem(label = "Watch Hours", value = "${currentUser.watchHours}h")
-              ProfileStatItem(label = "Voice Hours", value = "${currentUser.voiceHours}h")
-              ProfileStatItem(label = "Level", value = "LVL ${currentUser.level}")
+              Spacer(modifier = Modifier.height(16.dp))
+
+              // User Level & XP
+              XPProgressBar(
+                currentXp = currentUser.xp,
+                maxThreshXp = when (currentUser.level) {
+                  1 -> 1000
+                  2 -> 2000
+                  3 -> 4000
+                  else -> 8000
+                }
+              )
+
+              Spacer(modifier = Modifier.height(16.dp))
+
+              // Stats row
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .clip(RoundedCornerShape(14.dp))
+                  .background(DarkSurfaceElevated)
+                  .border(1.dp, DarkCardBorderSubtle, RoundedCornerShape(14.dp))
+                  .padding(vertical = 12.dp, horizontal = 6.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+              ) {
+                ProfileStatItem(label = "Rooms Joined", value = "${currentUser.watchHours + myRooms.size * 2}")
+                Box(modifier = Modifier.width(1.dp).height(28.dp).background(DarkCardBorderSubtle))
+                ProfileStatItem(label = "Watch Hours", value = "${currentUser.watchHours}h")
+                Box(modifier = Modifier.width(1.dp).height(28.dp).background(DarkCardBorderSubtle))
+                ProfileStatItem(label = "Voice Hours", value = "${currentUser.voiceHours}h")
+                Box(modifier = Modifier.width(1.dp).height(28.dp).background(DarkCardBorderSubtle))
+                ProfileStatItem(label = "Level", value = "LVL ${currentUser.level}")
+              }
+
+              Spacer(modifier = Modifier.height(16.dp))
+
+              // Profile Actions: Edit Profile & Settings
+              Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+              ) {
+                // Edit Profile Button
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Brush.horizontalGradient(listOf(IndigoPrimary, IndigoViolet)))
+                    .clickable { onOpenEditProfile() }
+                    .padding(vertical = 10.dp)
+                    .testTag("edit_profile_btn")
+                ) {
+                  Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Edit Profile", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                  }
+                }
+
+                // Settings Button
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(DarkSurfaceElevated)
+                    .border(1.dp, DarkCardBorderSubtle, RoundedCornerShape(12.dp))
+                    .clickable { onOpenSettings() }
+                    .padding(vertical = 10.dp)
+                    .testTag("settings_btn")
+                ) {
+                  Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Settings, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(15.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Settings", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                  }
+                }
+              }
             }
           }
         }
       }
 
-      // 2. Guest Link Mobile Banner (if guest)
+      // 2. Virtual Coin Wallet Card
+      item {
+        CoinWalletCard(
+          walletState = coinWalletState,
+          onOpenDailyTasks = onOpenDailyTasks,
+          onOpenCoinHistory = onOpenCoinHistory,
+          onAddTestBonus = onAddTestBonus
+        )
+      }
+
+      // 3. Guest Link Mobile Banner (if guest)
       if (currentUser.isGuest) {
         item {
           GuestVerificationReminderBanner(
@@ -230,28 +314,34 @@ fun ProfileScreen(
         }
       }
 
-      // 3. Sub-tabs: My Rooms, Favourites, Badges
+      // 3. Sub-tabs: My Rooms, Favourites, Badges, Games
       item {
         Row(
           modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(8.dp)
+          horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
           TabButton(
-            title = "👑 My Rooms (${myRooms.size})",
+            title = "👑 Rooms (${myRooms.size})",
             isSelected = selectedSubTab == 0,
             onClick = { selectedSubTab = 0 },
             modifier = Modifier.weight(1f)
           )
           TabButton(
-            title = "❤️ Favourites (${favouriteRooms.size})",
+            title = "❤️ Favs (${favouriteRooms.size})",
             isSelected = selectedSubTab == 1,
             onClick = { selectedSubTab = 1 },
             modifier = Modifier.weight(1f)
           )
           TabButton(
-            title = "🏅 Badges (${currentUser.badges.size})",
+            title = "🏅 Badges",
             isSelected = selectedSubTab == 2,
             onClick = { selectedSubTab = 2 },
+            modifier = Modifier.weight(1f)
+          )
+          TabButton(
+            title = "🎮 Games",
+            isSelected = selectedSubTab == 3,
+            onClick = { selectedSubTab = 3 },
             modifier = Modifier.weight(1f)
           )
         }
@@ -341,6 +431,66 @@ fun ProfileScreen(
             }
           }
         }
+
+        3 -> {
+          item {
+            Surface(
+              color = DarkSurface,
+              shape = RoundedCornerShape(14.dp),
+              modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+            ) {
+              Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                  text = "🎮 Game Stats",
+                  fontSize = 16.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = Color.White
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Chess Stat
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(DarkSurfaceElevated)
+                    .padding(12.dp)
+                ) {
+                  Text("♟️", fontSize = 28.sp)
+                  Spacer(modifier = Modifier.width(12.dp))
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text("Chess", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Games: ${currentUser.chessGames} • Wins: ${currentUser.chessWins}", fontSize = 12.sp, color = TextSecondary)
+                  }
+                  val chessWinRate = if (currentUser.chessGames > 0) (currentUser.chessWins * 100 / currentUser.chessGames) else 0
+                  Text("$chessWinRate% Win", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EmeraldOnline)
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Ludo Stat
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(DarkSurfaceElevated)
+                    .padding(12.dp)
+                ) {
+                  Text("🎲", fontSize = 28.sp)
+                  Spacer(modifier = Modifier.width(12.dp))
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text("Ludo", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("Games: ${currentUser.ludoGames} • Wins: ${currentUser.ludoWins}", fontSize = 12.sp, color = TextSecondary)
+                  }
+                  val ludoWinRate = if (currentUser.ludoGames > 0) (currentUser.ludoWins * 100 / currentUser.ludoGames) else 0
+                  Text("$ludoWinRate% Win", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = AmberXp)
+                }
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -355,10 +505,10 @@ fun TabButton(
 ) {
   Surface(
     color = if (isSelected) IndigoPrimary else DarkSurfaceCard,
-    shape = RoundedCornerShape(12.dp),
+    shape = RoundedCornerShape(14.dp),
     border = androidx.compose.foundation.BorderStroke(
       1.dp,
-      if (isSelected) IndigoPrimary else DarkSurfaceBorder
+      if (isSelected) IndigoPrimary else DarkCardBorderSubtle
     ),
     modifier = modifier.clickable { onClick() }
   ) {
@@ -378,14 +528,16 @@ fun ProfileStatItem(label: String, value: String) {
   Column(horizontalAlignment = Alignment.CenterHorizontally) {
     Text(
       text = value,
-      fontSize = 16.sp,
-      fontWeight = FontWeight.Bold,
+      fontSize = 17.sp,
+      fontWeight = FontWeight.ExtraBold,
       color = Color.White
     )
+    Spacer(modifier = Modifier.height(2.dp))
     Text(
       text = label,
       fontSize = 11.sp,
-      color = TextSecondary
+      color = TextSecondary,
+      fontWeight = FontWeight.Medium
     )
   }
 }

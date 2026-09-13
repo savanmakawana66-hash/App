@@ -153,3 +153,31 @@ data class RtcDataChannelPacket(
   val timestamp: Long = System.currentTimeMillis(),
   val payloadJson: String
 )
+
+/**
+ * High-level WebSocket signaling protocol message types
+ */
+enum class WebRtcSignalType {
+  OFFER,
+  ANSWER,
+  ICE_CANDIDATE,
+  PEER_JOINED,
+  PEER_LEFT,
+  HEARTBEAT
+}
+
+/**
+ * Message payload for secure WebSocket signaling server
+ */
+data class WebRtcSignalMessage(
+  val type: WebRtcSignalType,
+  val senderId: String,
+  val targetId: String? = null,
+  val roomId: String,
+  val sdp: String? = null,
+  val candidate: String? = null,
+  val sdpMid: String? = null,
+  val sdpMLineIndex: Int? = null,
+  val timestamp: Long = System.currentTimeMillis()
+)
+

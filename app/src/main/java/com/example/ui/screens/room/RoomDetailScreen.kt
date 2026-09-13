@@ -3,12 +3,18 @@ package com.example.ui.screens.room
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -20,8 +26,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -62,683 +71,870 @@ fun RoomDetailScreen(
   onInspectUser: (Friend) -> Unit,
   onOpenRoomSettings: () -> Unit,
   onOpenInvite: () -> Unit,
-  onReportMessage: (msgId: String, senderName: String) -> Unit
+  onReportMessage: (msgId: String, senderName: String) -> Unit,
+  // Enhanced Voice Room actions
+  onSendGift: (giftName: String, giftEmoji: String, coinCost: Int) -> Boolean = { _, _, _ -> false },
+  onToggleFollowRoom: () -> Unit = {},
+  onUpdateVideoAudioSettings: (videoVolume: Float, isMuted: Boolean, micVolume: Float) -> Unit = { _, _, _ -> },
+  onUpdateRoomTheme: (themeId: String, customConfig: RoomThemeConfig?) -> Unit = { _, _ -> },
+  onUpdateRoomFullConfig: (
+    name: String,
+    desc: String,
+    announcement: String,
+    mode: VideoControlMode,
+    locked: Boolean,
+    seatPerm: SeatPermission,
+    chatPerm: ChatPermission,
+    isVideoEnabled: Boolean,
+    isGameEnabled: Boolean,
+    activeGameType: String?
+  ) -> Unit = { _, _, _, _, _, _, _, _, _, _ -> },
+  onSetRoomGame: (gameType: String?, isEnabled: Boolean) -> Unit = { _, _ -> },
+  onAddAdmin: (userId: String, username: String) -> Unit = { _, _ -> },
+  onRemoveAdmin: (userId: String) -> Unit = {},
+  onDeleteRoom: () -> Unit = {}
 ) {
   val context = LocalContext.current
   val isOwner = room.ownerId == currentUser.id
   val isAdmin = admins.any { it.userId == currentUser.id }
+  val canManage = isOwner || isAdmin
   val currentSeat = seats.find { it.userId == currentUser.id }
   val isUserSeated = currentSeat != null
   val hasRequestedSeat = audience.find { it.userId == currentUser.id }?.hasRequestedSeat == true
 
   var chatText by remember { mutableStateOf("") }
-  var isFullscreen by remember { mutableStateOf(false) }
-  var showVideoSelectMenu by remember { mutableStateOf(false) }
+  var showGiftsSheet by remember { mutableStateOf(false) }
+  var showThemeEditorDialog by remember { mutableStateOf(false) }
+  var showEditRoomDialog by remember { mutableStateOf(false) }
+  var showVideoSelectDialog by remember { mutableStateOf(false) }
+  var isAnnouncementExpanded by remember { mutableStateOf(false) }
+  var showAudioSliders by remember { mutableStateOf(false) }
+
+  // Animated gift floating effect
+  var floatingGiftEmoji by remember { mutableStateOf<String?>(null) }
+  val giftAnimY = remember { Animatable(100f) }
+  val giftAnimAlpha = remember { Animatable(1f) }
+
   val chatListState = rememberLazyListState()
 
-  // Auto-scroll chat when new message arrives
+  // Video file picker for host streaming
+  val mediaPickerLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.GetContent()
+  ) { uri: Uri? ->
+    uri?.let {
+      val filename = it.lastPathSegment?.substringAfterLast("/") ?: "Selected Media Video"
+      onChangeVideo(filename, 1200)
+    }
+  }
+
+  // Auto-scroll chat
   LaunchedEffect(chatMessages.size) {
     if (chatMessages.isNotEmpty()) {
       chatListState.animateScrollToItem(chatMessages.size - 1)
     }
   }
 
-  Scaffold(
-    containerColor = DarkBackground,
-    topBar = {
-      // 1. Header: Room Name, Level, Room ID, Owner 👑, Actions
+  ProvideRoomTheme(room.themeId, room.customThemeConfig) {
+    val theme = LocalRoomTheme.current
+
+    // Twinkling / Ambient Animation
+    val infiniteTransition = rememberInfiniteTransition(label = "ambient_anim")
+    val ambientPhase by infiniteTransition.animateFloat(
+      initialValue = 0f,
+      targetValue = 1f,
+      animationSpec = infiniteRepeatable(
+        animation = tween(durationMillis = 8000, easing = LinearEasing),
+        repeatMode = RepeatMode.Restart
+      ),
+      label = "ambient_phase"
+    )
+
+    Box(
+      modifier = Modifier
+        .fillMaxSize()
+        .background(theme.backgroundBrush)
+        .testTag("room_detail_screen")
+    ) {
+      // 1. Ambient Background Particles / Canvas
+      if (theme.ambientParticles) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          val starOffsets = listOf(
+            Offset(size.width * 0.15f, size.height * 0.12f),
+            Offset(size.width * 0.85f, size.height * 0.18f),
+            Offset(size.width * 0.50f, size.height * 0.28f),
+            Offset(size.width * 0.22f, size.height * 0.45f),
+            Offset(size.width * 0.78f, size.height * 0.52f),
+            Offset(size.width * 0.12f, size.height * 0.70f),
+            Offset(size.width * 0.88f, size.height * 0.78f),
+            Offset(size.width * 0.42f, size.height * 0.85f)
+          )
+
+          starOffsets.forEachIndexed { index, pos ->
+            val phaseOffset = (ambientPhase + (index * 0.15f)) % 1f
+            val alpha = (kotlin.math.sin(phaseOffset * Math.PI.toFloat())).coerceIn(0.15f, 0.85f)
+            drawCircle(
+              color = theme.primaryAccent.copy(alpha = alpha),
+              radius = 2.5f + (index % 3),
+              center = pos
+            )
+          }
+        }
+      }
+
+      // 2. Main Content Column
       Column(
         modifier = Modifier
-          .fillMaxWidth()
-          .background(DarkSurface)
+          .fillMaxSize()
           .statusBarsPadding()
-          .padding(horizontal = 14.dp, vertical = 8.dp)
+          .navigationBarsPadding()
       ) {
+        // TOP HEADER
         Row(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.SpaceBetween,
-          modifier = Modifier.fillMaxWidth()
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
         ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f)
-          ) {
+          // Left: Leave Room & Title Info
+          Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
             IconButton(
               onClick = onLeaveRoom,
               modifier = Modifier
                 .size(36.dp)
                 .testTag("leave_room_btn")
             ) {
-              Icon(
-                imageVector = Icons.Default.ArrowBack,
-                contentDescription = "Leave Room",
-                tint = Color.White
-              )
+              Icon(Icons.Default.ArrowBack, contentDescription = "Exit Room", tint = Color.White)
             }
+
             Spacer(modifier = Modifier.width(4.dp))
+
             Column {
               Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                   text = room.name,
-                  fontSize = 16.sp,
+                  fontSize = 15.sp,
                   fontWeight = FontWeight.Bold,
                   color = Color.White,
                   maxLines = 1,
                   overflow = TextOverflow.Ellipsis
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                RoomLevelBadge(level = room.roomLevel)
-              }
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.clickable {
-                  val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                  cm.setPrimaryClip(ClipData.newPlainText("Room ID", room.id))
+                // Themed Level Badge
+                Surface(
+                  color = theme.primaryAccent.copy(alpha = 0.25f),
+                  shape = RoundedCornerShape(6.dp),
+                  border = androidx.compose.foundation.BorderStroke(1.dp, theme.primaryAccent.copy(alpha = 0.5f))
+                ) {
+                  Text(
+                    text = "LV.${room.roomLevel}",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = theme.primaryAccent,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                  )
                 }
-              ) {
-                Text(
-                  text = "ID: ${room.id}",
-                  fontSize = 11.sp,
-                  color = TextSecondary,
-                  fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                  text = "👑 ${room.ownerName}",
-                  fontSize = 11.sp,
-                  color = GoldOwner,
-                  fontWeight = FontWeight.Bold
-                )
+              }
+
+              // Room ID & Follow Action
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable {
+                      val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                      cm.setPrimaryClip(ClipData.newPlainText("Room ID", room.id))
+                    }
+                ) {
+                  Text(
+                    text = "ID: ${room.id}",
+                    fontSize = 10.sp,
+                    color = Color.White.copy(alpha = 0.6f)
+                  )
+                  Spacer(modifier = Modifier.width(3.dp))
+                  Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = "Copy ID",
+                    tint = theme.primaryAccent,
+                    modifier = Modifier.size(11.dp)
+                  )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Follow Button
+                Surface(
+                  color = if (room.isFollowed) theme.primaryAccent.copy(alpha = 0.2f) else theme.primaryAccent,
+                  shape = RoundedCornerShape(10.dp),
+                  border = if (room.isFollowed) androidx.compose.foundation.BorderStroke(1.dp, theme.primaryAccent) else null,
+                  modifier = Modifier
+                    .clickable { onToggleFollowRoom() }
+                    .testTag("follow_room_btn")
+                ) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                  ) {
+                    Text(
+                      text = if (room.isFollowed) "✓ Following" else "+ Follow",
+                      fontSize = 9.sp,
+                      fontWeight = FontWeight.Bold,
+                      color = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(
+                      text = "${room.followerCount}",
+                      fontSize = 9.sp,
+                      color = Color.White.copy(alpha = 0.8f)
+                    )
+                  }
+                }
               }
             }
           }
 
+          // Right: Action Buttons (Theme, Edit/Settings, Invite)
           Row(verticalAlignment = Alignment.CenterVertically) {
+            // Theme Button (Available to all; editable by room managers)
             IconButton(
-              onClick = onOpenInvite,
-              modifier = Modifier.size(36.dp).testTag("room_invite_btn")
+              onClick = { showThemeEditorDialog = true },
+              modifier = Modifier
+                .size(34.dp)
+                .testTag("theme_editor_btn")
             ) {
-              Icon(Icons.Default.Share, contentDescription = "Invite", tint = IndigoLight, modifier = Modifier.size(20.dp))
+              Icon(
+                Icons.Default.Palette,
+                contentDescription = if (canManage) "Edit Room Theme" else "View Room Theme",
+                tint = theme.primaryAccent,
+                modifier = Modifier.size(20.dp)
+              )
             }
 
-            if (isOwner || isAdmin) {
+            if (canManage) {
+              // Room Settings / Edit Dialog
               IconButton(
-                onClick = onOpenRoomSettings,
-                modifier = Modifier.size(36.dp).testTag("room_settings_btn")
+                onClick = { showEditRoomDialog = true },
+                modifier = Modifier
+                  .size(34.dp)
+                  .testTag("room_settings_btn")
               ) {
-                Icon(Icons.Default.Settings, contentDescription = "Settings", tint = Color.White, modifier = Modifier.size(20.dp))
+                Icon(
+                  Icons.Default.Settings,
+                  contentDescription = "Room Settings",
+                  tint = Color.White,
+                  modifier = Modifier.size(20.dp)
+                )
+              }
+            }
+
+            // Share / Invite
+            IconButton(
+              onClick = onOpenInvite,
+              modifier = Modifier
+                .size(34.dp)
+                .testTag("invite_friend_btn")
+            ) {
+              Icon(
+                Icons.Default.PersonAdd,
+                contentDescription = "Invite Friends",
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+              )
+            }
+          }
+        }
+
+        // ROOM ANNOUNCEMENT BANNER
+        Surface(
+          color = theme.announcementBg,
+          shape = RoundedCornerShape(12.dp),
+          border = androidx.compose.foundation.BorderStroke(1.dp, theme.announcementBorder),
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 4.dp)
+            .clickable { isAnnouncementExpanded = !isAnnouncementExpanded }
+            .testTag("room_announcement_banner")
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+          ) {
+            Text("📢", fontSize = 13.sp)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+              text = room.announcement,
+              fontSize = 11.sp,
+              color = Color.White,
+              maxLines = if (isAnnouncementExpanded) 5 else 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.weight(1f)
+            )
+            Icon(
+              if (isAnnouncementExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+              contentDescription = null,
+              tint = Color.White.copy(alpha = 0.6f),
+              modifier = Modifier.size(14.dp)
+            )
+          }
+        }
+
+        // OPTIONAL VIDEO ROOM STAGE
+        if (room.isVideoRoomEnabled) {
+          Surface(
+            color = theme.surfaceGlass,
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, theme.surfaceGlassBorder),
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 14.dp, vertical = 4.dp)
+              .testTag("video_room_stage")
+          ) {
+            Column(modifier = Modifier.padding(10.dp)) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Text("🎬", fontSize = 14.sp)
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Column {
+                    Text(
+                      text = room.activeVideoTitle,
+                      fontSize = 12.sp,
+                      fontWeight = FontWeight.Bold,
+                      color = Color.White,
+                      maxLines = 1,
+                      overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                      text = "${formatSeconds(room.activeVideoPosSec.toInt())} / ${formatSeconds(room.activeVideoDurationSec)} • ${room.videoQuality}",
+                      fontSize = 9.sp,
+                      color = theme.primaryAccent
+                    )
+                  }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  // Audio Sliders Toggle Button
+                  IconButton(
+                    onClick = { showAudioSliders = !showAudioSliders },
+                    modifier = Modifier.size(28.dp)
+                  ) {
+                    Icon(
+                      if (showAudioSliders) Icons.Default.Tune else Icons.Default.VolumeUp,
+                      contentDescription = "Audio Controls",
+                      tint = if (showAudioSliders) theme.primaryAccent else Color.White,
+                      modifier = Modifier.size(16.dp)
+                    )
+                  }
+
+                  if (canControlVideo) {
+                    IconButton(
+                      onClick = { showVideoSelectDialog = true },
+                      modifier = Modifier.size(28.dp)
+                    ) {
+                      Icon(Icons.Default.VideoLibrary, contentDescription = "Change Video", tint = theme.primaryAccent, modifier = Modifier.size(16.dp))
+                    }
+                  }
+                }
+              }
+
+              // Video Playback Controls (Host / Admin or Everyone based on settings)
+              if (canControlVideo) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.Center,
+                  modifier = Modifier.fillMaxWidth()
+                ) {
+                  IconButton(onClick = onRewind10, modifier = Modifier.size(30.dp)) {
+                    Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = Color.White, modifier = Modifier.size(18.dp))
+                  }
+                  IconButton(onClick = onTogglePlayPause, modifier = Modifier.size(34.dp)) {
+                    Icon(
+                      if (room.isVideoPlaying) Icons.Default.PauseCircleFilled else Icons.Default.PlayCircleFilled,
+                      contentDescription = "Play/Pause",
+                      tint = theme.primaryAccent,
+                      modifier = Modifier.size(26.dp)
+                    )
+                  }
+                  IconButton(onClick = onForward10, modifier = Modifier.size(30.dp)) {
+                    Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = Color.White, modifier = Modifier.size(18.dp))
+                  }
+                }
+
+                // Scrubber
+                val progress = if (room.activeVideoDurationSec > 0) {
+                  (room.activeVideoPosSec / room.activeVideoDurationSec).coerceIn(0f, 1f)
+                } else 0f
+                Slider(
+                  value = progress,
+                  onValueChange = { posFraction ->
+                    onSeekVideo(posFraction * room.activeVideoDurationSec)
+                  },
+                  colors = SliderDefaults.colors(
+                    thumbColor = theme.primaryAccent,
+                    activeTrackColor = theme.primaryAccent
+                  ),
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .height(20.dp)
+                )
+              }
+
+              // SEPARATE AUDIO CONTROLS (Video Volume & Mic Volume)
+              if (showAudioSliders) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Divider(color = Color.White.copy(alpha = 0.1f))
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Video Volume Slider
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.fillMaxWidth()
+                ) {
+                  IconButton(
+                    onClick = {
+                      onUpdateVideoAudioSettings(room.videoVolume, !room.isVideoMuted, room.micVolume)
+                    },
+                    modifier = Modifier.size(24.dp)
+                  ) {
+                    Icon(
+                      if (room.isVideoMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                      contentDescription = "Mute Video",
+                      tint = if (room.isVideoMuted) Color(0xFFF43F5E) else Color.White,
+                      modifier = Modifier.size(14.dp)
+                    )
+                  }
+                  Text("Video: ${(room.videoVolume * 100).toInt()}%", fontSize = 10.sp, color = Color.White)
+                  Slider(
+                    value = if (room.isVideoMuted) 0f else room.videoVolume,
+                    onValueChange = { vol ->
+                      onUpdateVideoAudioSettings(vol, false, room.micVolume)
+                    },
+                    modifier = Modifier
+                      .weight(1f)
+                      .height(20.dp),
+                    colors = SliderDefaults.colors(thumbColor = theme.secondaryAccent, activeTrackColor = theme.secondaryAccent)
+                  )
+                }
+
+                // Mic Sensitivity Slider
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.fillMaxWidth()
+                ) {
+                  Icon(Icons.Default.Mic, contentDescription = null, tint = theme.primaryAccent, modifier = Modifier.size(14.dp))
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text("Mic: ${(room.micVolume * 100).toInt()}%", fontSize = 10.sp, color = Color.White)
+                  Slider(
+                    value = room.micVolume,
+                    onValueChange = { vol ->
+                      onUpdateVideoAudioSettings(room.videoVolume, room.isVideoMuted, vol)
+                    },
+                    modifier = Modifier
+                      .weight(1f)
+                      .height(20.dp),
+                    colors = SliderDefaults.colors(thumbColor = theme.primaryAccent, activeTrackColor = theme.primaryAccent)
+                  )
+                }
               }
             }
           }
         }
 
-        // Room XP bar
-        Spacer(modifier = Modifier.height(4.dp))
-        XPProgressBar(
-          currentXp = room.roomXp,
-          maxThreshXp = when (room.roomLevel) {
-            1 -> 5000
-            2 -> 10000
-            3 -> 20000
-            else -> 35000
-          },
-          showLabels = false
-        )
-      }
-    },
-    bottomBar = {
-      // 6. Bottom Control Bar: 🎙️ Mic, 🔊 Speaker, ✋ Raise Hand / Request Seat, 💬 Chat, ⚙️ Settings
-      Surface(
-        color = DarkSurface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, DarkSurfaceBorder),
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        Column(
+        // OPTIONAL IN-ROOM PARTY GAME STAGE
+        if (room.isGameEnabled) {
+          RoomGameStage(
+            activeGame = room.activeGameType ?: "DICE",
+            onCloseGame = { onSetRoomGame(null, false) }
+          )
+        }
+
+        // 8 VOICE SEATS STAGE (2 ROWS OF 4 SEATS)
+        Surface(
+          color = theme.seatContainerBg,
+          shape = RoundedCornerShape(20.dp),
+          border = androidx.compose.foundation.BorderStroke(1.dp, theme.seatContainerBorder),
           modifier = Modifier
-            .navigationBarsPadding()
-            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .testTag("voice_seats_stage")
         ) {
-          // Emoji Quick Reaction Bar
-          Row(
-            horizontalArrangement = Arrangement.SpaceAround,
+          Column(
             modifier = Modifier
               .fillMaxWidth()
-              .padding(bottom = 6.dp)
+              .padding(vertical = 12.dp, horizontal = 8.dp)
           ) {
-            listOf("❤️", "🔥", "😂", "👏", "🍿", "🎉", "😱").forEach { emoji ->
-              Surface(
-                color = DarkSurfaceElevated,
-                shape = CircleShape,
-                modifier = Modifier
-                  .clickable {
-                    if (chatMessages.isNotEmpty()) {
-                      onAddReaction(chatMessages.last().id, emoji)
-                    } else {
-                      onSendChatMessage(emoji)
+            // Row 1: Seats 0..3
+            Row(
+              horizontalArrangement = Arrangement.SpaceAround,
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              for (i in 0..3) {
+                val seat = seats.getOrNull(i) ?: RoomSeat(seatIndex = i)
+                VoiceSeatItem(
+                  seat = seat,
+                  isCurrentUser = seat.userId == currentUser.id,
+                  theme = theme,
+                  onTakeSeat = { onTakeSeat(i) },
+                  onInspectUser = {
+                    if (seat.userId != null && seat.username != null) {
+                      onInspectUser(
+                        Friend(
+                          userId = seat.userId,
+                          username = seat.username,
+                          avatar = seat.avatar ?: "avatar_1"
+                        )
+                      )
                     }
                   }
-                  .padding(2.dp)
-              ) {
-                Text(
-                  text = emoji,
-                  fontSize = 16.sp,
-                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+              }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Row 2: Seats 4..7
+            Row(
+              horizontalArrangement = Arrangement.SpaceAround,
+              modifier = Modifier.fillMaxWidth()
+            ) {
+              for (i in 4..7) {
+                val seat = seats.getOrNull(i) ?: RoomSeat(seatIndex = i)
+                VoiceSeatItem(
+                  seat = seat,
+                  isCurrentUser = seat.userId == currentUser.id,
+                  theme = theme,
+                  onTakeSeat = { onTakeSeat(i) },
+                  onInspectUser = {
+                    if (seat.userId != null && seat.username != null) {
+                      onInspectUser(
+                        Friend(
+                          userId = seat.userId,
+                          username = seat.username,
+                          avatar = seat.avatar ?: "avatar_1"
+                        )
+                      )
+                    }
+                  }
                 )
               }
             }
           }
+        }
 
-          // Chat Input Row
+        // AUDIENCE & SEAT REQUEST STRIP
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("👥", fontSize = 12.sp)
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+              text = "${room.audienceCount} listening",
+              fontSize = 11.sp,
+              color = Color.White.copy(alpha = 0.7f)
+            )
+          }
+
+          if (canManage) {
+            val pendingRequests = audience.count { it.hasRequestedSeat }
+            if (pendingRequests > 0) {
+              Surface(
+                color = theme.primaryAccent,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                  .clickable { onOpenSeatRequests() }
+                  .testTag("seat_requests_pill")
+              ) {
+                Text(
+                  text = "✋ $pendingRequests Request${if (pendingRequests > 1) "s" else ""}",
+                  fontSize = 10.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = Color.White,
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+              }
+            }
+          } else if (!isUserSeated) {
+            if (room.seatPermission == SeatPermission.REQUIRE_APPROVAL) {
+              OutlinedButton(
+                onClick = onRequestSeat,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.height(28.dp)
+              ) {
+                Text(
+                  text = if (hasRequestedSeat) "Request Sent ✋" else "Request to Speak ✋",
+                  fontSize = 10.sp,
+                  color = theme.primaryAccent
+                )
+              }
+            }
+          }
+        }
+
+        // ROOM CHAT LIST
+        LazyColumn(
+          state = chatListState,
+          modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 2.dp)
+            .testTag("room_chat_list")
+        ) {
+          items(chatMessages, key = { it.id }) { msg ->
+            ThemedChatMessageItem(
+              message = msg,
+              currentUserId = currentUser.id,
+              canModerate = canManage,
+              theme = theme,
+              onAddReaction = { emoji -> onAddReaction(msg.id, emoji) },
+              onDelete = { onDeleteMessage(msg.id) },
+              onReport = { onReportMessage(msg.id, msg.senderName) }
+            )
+          }
+        }
+
+        // QUICK EMOJI BAR & GIFTS BUTTON
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween,
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 4.dp)
+        ) {
+          // Emoji Pills
+          Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("❤️", "👏", "🔥", "😂", "🎉", "🚀").forEach { emoji ->
+              Surface(
+                color = Color.Black.copy(alpha = 0.35f),
+                shape = CircleShape,
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                modifier = Modifier
+                  .size(30.dp)
+                  .clickable {
+                    onSendChatMessage(emoji)
+                  }
+              ) {
+                Box(contentAlignment = Alignment.Center) {
+                  Text(emoji, fontSize = 14.sp)
+                }
+              }
+            }
+          }
+
+          // Gifts Trigger Button
+          Surface(
+            color = theme.primaryAccent.copy(alpha = 0.25f),
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, theme.primaryAccent),
+            modifier = Modifier
+              .clickable { showGiftsSheet = true }
+              .testTag("open_gifts_sheet_btn")
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+              Text("🎁", fontSize = 14.sp)
+              Spacer(modifier = Modifier.width(4.dp))
+              Text("Gifts", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = theme.primaryAccent)
+            }
+          }
+        }
+
+        // BOTTOM CONTROLS (Chat input, prominent mic, seat leave/request)
+        Surface(
+          color = Color(0xFF090B14).copy(alpha = 0.9f),
+          modifier = Modifier.fillMaxWidth()
+        ) {
           Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 14.dp, vertical = 8.dp)
           ) {
+            // Chat Input Field
             OutlinedTextField(
               value = chatText,
               onValueChange = { chatText = it },
-              placeholder = { Text("Say something in room...", fontSize = 12.sp) },
+              placeholder = { Text("Say something...", fontSize = 12.sp, color = Color.White.copy(alpha = 0.5f)) },
               singleLine = true,
               shape = RoundedCornerShape(20.dp),
-              colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = DarkSurfaceElevated,
-                unfocusedContainerColor = DarkSurfaceElevated,
-                focusedBorderColor = IndigoPrimary,
-                unfocusedBorderColor = DarkSurfaceBorder
-              ),
               modifier = Modifier
                 .weight(1f)
-                .testTag("room_chat_input")
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            IconButton(
-              onClick = {
+                .height(48.dp)
+                .testTag("room_chat_input"),
+              colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = theme.primaryAccent,
+                unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White
+              ),
+              trailingIcon = {
                 if (chatText.isNotBlank()) {
-                  onSendChatMessage(chatText)
-                  chatText = ""
+                  IconButton(
+                    onClick = {
+                      onSendChatMessage(chatText.trim())
+                      chatText = ""
+                    },
+                    modifier = Modifier.testTag("send_chat_msg_btn")
+                  ) {
+                    Icon(Icons.Default.Send, contentDescription = "Send", tint = theme.primaryAccent, modifier = Modifier.size(18.dp))
+                  }
                 }
-              },
-              colors = IconButtonDefaults.iconButtonColors(containerColor = IndigoPrimary),
-              modifier = Modifier
-                .size(42.dp)
-                .testTag("send_room_chat_btn")
-            ) {
-              Icon(
-                imageVector = Icons.Default.Send,
-                contentDescription = "Send",
-                tint = Color.White,
-                modifier = Modifier.size(18.dp)
-              )
-            }
-          }
+              }
+            )
 
-          Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
-          // Control buttons
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceAround,
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            // Microphone toggle (Only if in voice seat)
+            // PROMINENT MIC BUTTON
             if (isUserSeated) {
               val isMuted = currentSeat?.isMuted == true
-              IconButton(
-                onClick = onToggleMic,
-                colors = IconButtonDefaults.iconButtonColors(
-                  containerColor = if (isMuted) RoseError else IndigoPrimary
-                ),
+              val isSpeaking = currentSeat?.isSpeaking == true
+
+              val micBg = if (isMuted) Color(0xFFF43F5E) else theme.primaryAccent
+
+              Box(
+                contentAlignment = Alignment.Center,
                 modifier = Modifier
-                  .size(46.dp)
-                  .testTag("toggle_mic_btn")
+                  .size(48.dp)
+                  .clip(CircleShape)
+                  .background(micBg)
+                  .border(2.dp, if (isSpeaking) Color.White else Color.Transparent, CircleShape)
+                  .clickable { onToggleMic() }
+                  .testTag("room_mic_toggle_btn")
               ) {
                 Icon(
                   imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                  contentDescription = "Microphone",
+                  contentDescription = if (isMuted) "Unmute" else "Mute",
                   tint = Color.White,
-                  modifier = Modifier.size(22.dp)
+                  modifier = Modifier.size(24.dp)
                 )
+              }
+
+              Spacer(modifier = Modifier.width(6.dp))
+
+              // Leave Seat Button
+              IconButton(
+                onClick = onLeaveSeat,
+                modifier = Modifier
+                  .size(40.dp)
+                  .testTag("leave_seat_btn")
+              ) {
+                Icon(Icons.Default.ExitToApp, contentDescription = "Leave Seat", tint = Color.White.copy(alpha = 0.8f))
               }
             } else {
-              // Audience: Request Seat button
+              // Not seated: Prompt to take seat
               Button(
-                onClick = onRequestSeat,
-                enabled = !hasRequestedSeat,
-                colors = ButtonDefaults.buttonColors(
-                  containerColor = if (hasRequestedSeat) DarkSurfaceElevated else VioletAudience
-                ),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                modifier = Modifier.testTag("request_voice_seat_btn")
+                onClick = {
+                  // Find first empty seat
+                  val emptyIdx = seats.indexOfFirst { it.userId == null }
+                  if (emptyIdx != -1) {
+                    onTakeSeat(emptyIdx)
+                  } else {
+                    onRequestSeat()
+                  }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = theme.primaryAccent),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                  .height(44.dp)
+                  .testTag("take_any_seat_btn")
               ) {
-                Icon(Icons.Default.FrontHand, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                  text = if (hasRequestedSeat) "Request Sent" else "Request Seat",
-                  fontSize = 12.sp,
-                  fontWeight = FontWeight.Bold
-                )
-              }
-            }
-
-            // Raise hand
-            if (isUserSeated) {
-              IconButton(
-                onClick = onToggleRaiseHand,
-                colors = IconButtonDefaults.iconButtonColors(
-                  containerColor = if (currentSeat?.raisedHand == true) AmberXp else DarkSurfaceElevated
-                ),
-                modifier = Modifier.size(46.dp).testTag("raise_hand_btn")
-              ) {
-                Text("✋", fontSize = 18.sp)
-              }
-            }
-
-            // Leave Seat button (if seated)
-            if (isUserSeated) {
-              OutlinedButton(
-                onClick = onLeaveSeat,
-                shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, TextSecondary),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                modifier = Modifier.testTag("leave_voice_seat_btn")
-              ) {
-                Text("Leave Seat", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-              }
-            }
-
-            // Owner/Admin Approve Requests button
-            if ((isOwner || isAdmin) && audience.any { it.hasRequestedSeat }) {
-              val pendingCount = audience.count { it.hasRequestedSeat }
-              Button(
-                onClick = onOpenSeatRequests,
-                colors = ButtonDefaults.buttonColors(containerColor = EmeraldOnline),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                modifier = Modifier.testTag("pending_seat_requests_btn")
-              ) {
-                Text("✋ Requests ($pendingCount)", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Icon(Icons.Default.Chair, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Sit", fontSize = 11.sp, fontWeight = FontWeight.Bold)
               }
             }
           }
         }
       }
+
+      // FLOATING GIFT ANIMATION (if gift sent)
+      floatingGiftEmoji?.let { emoji ->
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .wrapContentSize(Alignment.Center)
+        ) {
+          Text(
+            text = emoji,
+            fontSize = 72.sp,
+            modifier = Modifier.scale(giftAnimAlpha.value)
+          )
+        }
+      }
     }
-  ) { paddingValues ->
-    Column(
-      modifier = Modifier
-        .fillMaxSize()
-        .padding(paddingValues)
-    ) {
-      // 2. SYNCHRONIZED VIDEO PLAYER (Top of room)
-      SynchronizedVideoPlayer(
+
+    // DIALOGS & SHEETS
+    if (showGiftsSheet) {
+      val wallet = com.example.network.security.ServerCoinManager.getWalletState(currentUser.id)
+      RoomGiftsSheet(
+        userCoins = wallet.balance,
+        onDismiss = { showGiftsSheet = false },
+        onSendGift = { name, emoji, cost ->
+          val success = onSendGift(name, emoji, cost)
+          if (success) {
+            floatingGiftEmoji = emoji
+          }
+          success
+        }
+      )
+    }
+
+    if (showThemeEditorDialog) {
+      RoomThemeEditorDialog(
+        currentThemeId = room.themeId,
+        currentConfig = room.customThemeConfig,
+        roomLevel = room.roomLevel,
+        canEdit = canManage,
+        onDismiss = { showThemeEditorDialog = false },
+        onSaveTheme = { themeId, config ->
+          onUpdateRoomTheme(themeId, config)
+          showThemeEditorDialog = false
+        }
+      )
+    }
+
+    if (showEditRoomDialog) {
+      RoomEditFullDialog(
         room = room,
-        canControlVideo = canControlVideo,
-        onTogglePlayPause = onTogglePlayPause,
-        onSeek = onSeekVideo,
-        onForward10 = onForward10,
-        onRewind10 = onRewind10,
-        onChangeVideoClick = { showVideoSelectMenu = true },
-        isFullscreen = isFullscreen,
-        onToggleFullscreen = { isFullscreen = !isFullscreen }
-      )
-
-      // Video selector drop-down dialog
-      if (showVideoSelectMenu) {
-        VideoSelectDialog(
-          onDismiss = { showVideoSelectMenu = false },
-          onSelect = { title, duration ->
-            onChangeVideo(title, duration)
-            showVideoSelectMenu = false
-          }
-        )
-      }
-
-      // 3. VOICE SEATS (8-Seat Grid)
-      VoiceSeatsSection(
-        seats = seats,
-        currentUserId = currentUser.id,
-        onSeatClick = { index, seat ->
-          if (seat.userId == null) {
-            onTakeSeat(index)
-          } else {
-            onInspectUser(
-              Friend(
-                userId = seat.userId,
-                username = seat.username ?: "User",
-                avatar = seat.avatar ?: "avatar_1",
-                isOnline = true
-              )
-            )
-          }
+        admins = admins,
+        isOwner = isOwner,
+        onDismiss = { showEditRoomDialog = false },
+        onSaveFullConfig = onUpdateRoomFullConfig,
+        onOpenThemeEditor = {
+          showEditRoomDialog = false
+          showThemeEditorDialog = true
+        },
+        onSelectThemePreset = { themeId ->
+          onUpdateRoomTheme(themeId, null)
+        },
+        onAddAdmin = onAddAdmin,
+        onRemoveAdmin = onRemoveAdmin,
+        onDeleteRoom = onDeleteRoom,
+        onPickMediaFile = {
+          mediaPickerLauncher.launch("video/*")
         }
       )
+    }
 
-      // 4. AUDIENCE BAR (Audience Mode)
-      AudienceBar(
-        audienceCount = room.audienceCount,
-        audienceMembers = audience,
-        isUserSeated = isUserSeated,
-        hasRequestedSeat = hasRequestedSeat,
-        canApproveRequests = isOwner || isAdmin,
-        onRequestSeat = onRequestSeat,
-        onOpenRequests = onOpenSeatRequests
+    if (showVideoSelectDialog) {
+      VideoSelectDialog(
+        onDismiss = { showVideoSelectDialog = false },
+        onSelect = { title, dur ->
+          onChangeVideo(title, dur)
+          showVideoSelectDialog = false
+        }
       )
-
-      Divider(color = DarkSurfaceBorder, thickness = 1.dp)
-
-      // 5. ROOM CHAT SECTION
-      Box(modifier = Modifier.weight(1f)) {
-        LazyColumn(
-          state = chatListState,
-          contentPadding = PaddingValues(12.dp),
-          verticalArrangement = Arrangement.spacedBy(8.dp),
-          modifier = Modifier.fillMaxSize()
-        ) {
-          items(chatMessages, key = { it.id }) { message ->
-            ChatMessageItem(
-              message = message,
-              currentUserId = currentUser.id,
-              canModerate = isOwner || isAdmin,
-              onDelete = { onDeleteMessage(message.id) },
-              onReport = { onReportMessage(message.id, message.senderName) },
-              onAddReaction = { emoji -> onAddReaction(message.id, emoji) }
-            )
-          }
-        }
-      }
-    }
-  }
-}
-
-@Composable
-fun SynchronizedVideoPlayer(
-  room: Room,
-  canControlVideo: Boolean,
-  onTogglePlayPause: () -> Unit,
-  onSeek: (Float) -> Unit,
-  onForward10: () -> Unit,
-  onRewind10: () -> Unit,
-  onChangeVideoClick: () -> Unit,
-  isFullscreen: Boolean,
-  onToggleFullscreen: () -> Unit
-) {
-  val height = if (isFullscreen) 280.dp else 190.dp
-
-  Box(
-    modifier = Modifier
-      .fillMaxWidth()
-      .height(height)
-      .background(Color.Black)
-      .testTag("video_player_container")
-  ) {
-    // Simulated video graphics: animated cyberpunk/cinematic glow background
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .background(
-          Brush.radialGradient(
-            listOf(
-              Color(0xFF1E1B4B),
-              Color(0xFF0F172A),
-              Color.Black
-            )
-          )
-        )
-    )
-
-    // Animated film/stream pattern
-    Column(
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.Center,
-      modifier = Modifier.fillMaxSize()
-    ) {
-      Text(
-        text = "🎬 ${room.activeVideoTitle}",
-        color = Color.White,
-        fontSize = 15.sp,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(horizontal = 20.dp)
-      )
-      Spacer(modifier = Modifier.height(4.dp))
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Surface(
-          color = EmeraldOnline.copy(alpha = 0.2f),
-          shape = RoundedCornerShape(4.dp)
-        ) {
-          Text(
-            text = "⚡ In Sync (12ms delay)",
-            color = EmeraldOnline,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-          )
-        }
-        Spacer(modifier = Modifier.width(6.dp))
-        Surface(
-          color = PurpleContainer,
-          shape = RoundedCornerShape(4.dp)
-        ) {
-          Text(
-            text = when (room.videoControlMode) {
-              VideoControlMode.EVERYONE -> "🎮 Controls: Everyone"
-              VideoControlMode.ADMINS_ONLY -> "🛡️ Controls: Admins"
-              VideoControlMode.OWNER_ONLY -> "👑 Controls: Owner"
-            },
-            color = Color.White,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-          )
-        }
-      }
-    }
-
-    // Top video controls: Stream change & Fullscreen
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(8.dp)
-        .align(Alignment.TopCenter)
-    ) {
-      Surface(
-        color = Color.Black.copy(alpha = 0.6f),
-        shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.clickable { onChangeVideoClick() }
-      ) {
-        Row(
-          verticalAlignment = Alignment.CenterVertically,
-          modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-        ) {
-          Icon(Icons.Default.VideoLibrary, contentDescription = null, tint = IndigoLight, modifier = Modifier.size(14.dp))
-          Spacer(modifier = Modifier.width(4.dp))
-          Text("Change Stream", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        }
-      }
-
-      IconButton(
-        onClick = onToggleFullscreen,
-        modifier = Modifier
-          .size(32.dp)
-          .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-      ) {
-        Icon(
-          imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-          contentDescription = "Fullscreen",
-          tint = Color.White,
-          modifier = Modifier.size(18.dp)
-        )
-      }
-    }
-
-    // Bottom video player controls & scrubber
-    Column(
-      modifier = Modifier
-        .fillMaxWidth()
-        .align(Alignment.BottomCenter)
-        .background(
-          Brush.verticalGradient(
-            listOf(Color.Transparent, Color.Black.copy(alpha = 0.9f))
-          )
-        )
-        .padding(horizontal = 12.dp, vertical = 6.dp)
-    ) {
-      // Progress scrubber slider
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        Text(
-          text = formatSeconds(room.activeVideoPosSec.toInt()),
-          color = Color.White,
-          fontSize = 10.sp,
-          fontWeight = FontWeight.Bold
-        )
-        Slider(
-          value = room.activeVideoPosSec,
-          onValueChange = { onSeek(it) },
-          valueRange = 0f..room.activeVideoDurationSec.toFloat(),
-          enabled = canControlVideo,
-          colors = SliderDefaults.colors(
-            thumbColor = IndigoPrimary,
-            activeTrackColor = IndigoPrimary,
-            inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-          ),
-          modifier = Modifier
-            .weight(1f)
-            .padding(horizontal = 8.dp)
-            .testTag("video_scrubber_slider")
-        )
-        Text(
-          text = formatSeconds(room.activeVideoDurationSec),
-          color = TextSecondary,
-          fontSize = 10.sp
-        )
-      }
-
-      // Play / Pause, Rewind 10s, Forward 10s
-      Row(
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        IconButton(
-          onClick = onRewind10,
-          enabled = canControlVideo,
-          modifier = Modifier.size(32.dp).testTag("rewind_10_btn")
-        ) {
-          Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = if (canControlVideo) Color.White else TextMuted)
-        }
-
-        Spacer(modifier = Modifier.width(16.dp))
-
-        IconButton(
-          onClick = onTogglePlayPause,
-          enabled = canControlVideo,
-          modifier = Modifier
-            .size(40.dp)
-            .background(if (canControlVideo) IndigoPrimary else DarkSurfaceElevated, CircleShape)
-            .testTag("video_play_pause_btn")
-        ) {
-          Icon(
-            imageVector = if (room.isVideoPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-            contentDescription = if (room.isVideoPlaying) "Pause" else "Play",
-            tint = Color.White,
-            modifier = Modifier.size(24.dp)
-          )
-        }
-
-        Spacer(modifier = Modifier.width(16.dp))
-
-        IconButton(
-          onClick = onForward10,
-          enabled = canControlVideo,
-          modifier = Modifier.size(32.dp).testTag("forward_10_btn")
-        ) {
-          Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = if (canControlVideo) Color.White else TextMuted)
-        }
-      }
-    }
-  }
-}
-
-@Composable
-fun VoiceSeatsSection(
-  seats: List<RoomSeat>,
-  currentUserId: String,
-  onSeatClick: (Int, RoomSeat) -> Unit
-) {
-  val occupiedCount = seats.count { it.userId != null }
-
-  Column(
-    modifier = Modifier
-      .fillMaxWidth()
-      .background(DarkSurface)
-      .padding(horizontal = 12.dp, vertical = 8.dp)
-  ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-      modifier = Modifier.fillMaxWidth()
-    ) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("🎙️", fontSize = 13.sp)
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(
-          text = "VOICE SEATS ($occupiedCount/8)",
-          fontSize = 12.sp,
-          fontWeight = FontWeight.ExtraBold,
-          color = Color.White,
-          letterSpacing = 1.sp
-        )
-      }
-      if (occupiedCount >= 8) {
-        Surface(color = RoseError.copy(alpha = 0.2f), shape = RoundedCornerShape(6.dp)) {
-          Text("FULL (8/8)", color = RoseError, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
-        }
-      } else {
-        Text("${8 - occupiedCount} seats free", color = EmeraldOnline, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-      }
-    }
-
-    Spacer(modifier = Modifier.height(8.dp))
-
-    // 2 rows of 4 seats
-    Row(
-      horizontalArrangement = Arrangement.SpaceBetween,
-      modifier = Modifier.fillMaxWidth()
-    ) {
-      for (i in 0..3) {
-        val seat = seats.getOrNull(i) ?: RoomSeat(seatIndex = i)
-        VoiceSeatItem(
-          seat = seat,
-          isCurrentUser = seat.userId == currentUserId,
-          onClick = { onSeatClick(i, seat) },
-          modifier = Modifier.weight(1f)
-        )
-      }
-    }
-
-    Spacer(modifier = Modifier.height(6.dp))
-
-    Row(
-      horizontalArrangement = Arrangement.SpaceBetween,
-      modifier = Modifier.fillMaxWidth()
-    ) {
-      for (i in 4..7) {
-        val seat = seats.getOrNull(i) ?: RoomSeat(seatIndex = i)
-        VoiceSeatItem(
-          seat = seat,
-          isCurrentUser = seat.userId == currentUserId,
-          onClick = { onSeatClick(i, seat) },
-          modifier = Modifier.weight(1f)
-        )
-      }
     }
   }
 }
@@ -747,240 +943,347 @@ fun VoiceSeatsSection(
 fun VoiceSeatItem(
   seat: RoomSeat,
   isCurrentUser: Boolean,
-  onClick: () -> Unit,
-  modifier: Modifier = Modifier
+  theme: ResolvedRoomTheme,
+  onTakeSeat: () -> Unit,
+  onInspectUser: () -> Unit
 ) {
+  val isOccupied = seat.userId != null
+
+  val infiniteTransition = rememberInfiniteTransition(label = "speaking_pulse_${seat.seatIndex}")
+  val speakingPulse by infiniteTransition.animateFloat(
+    initialValue = 1.0f,
+    targetValue = if (seat.isSpeaking) 1.20f else 1.0f,
+    animationSpec = infiniteRepeatable(
+      animation = tween(durationMillis = 500, easing = FastOutSlowInEasing),
+      repeatMode = RepeatMode.Reverse
+    ),
+    label = "pulse_scale"
+  )
+  val glowAlpha by infiniteTransition.animateFloat(
+    initialValue = 0.25f,
+    targetValue = if (seat.isSpeaking) 0.85f else 0.0f,
+    animationSpec = infiniteRepeatable(
+      animation = tween(durationMillis = 500, easing = LinearEasing),
+      repeatMode = RepeatMode.Reverse
+    ),
+    label = "glow_alpha"
+  )
+
   Column(
     horizontalAlignment = Alignment.CenterHorizontally,
-    modifier = modifier
-      .padding(4.dp)
-      .clickable { onClick() }
-      .testTag("seat_${seat.seatIndex}")
+    modifier = Modifier
+      .width(76.dp)
+      .testTag("voice_seat_${seat.seatIndex}")
   ) {
-    if (seat.userId != null) {
-      SpeakingAvatar(
-        avatarName = seat.avatar ?: "avatar_1",
-        username = seat.username ?: "User",
-        isSpeaking = seat.isSpeaking,
-        isMuted = seat.isMuted,
-        isOwner = seat.isOwner,
-        isAdmin = seat.isAdmin,
-        size = 40.dp
-      )
-    } else {
-      // Empty seat box
+    if (isOccupied) {
       Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-          .size(46.dp)
-          .clip(CircleShape)
-          .background(DarkSurfaceElevated)
-          .border(1.dp, DarkSurfaceBorder, CircleShape)
+          .size(62.dp)
+          .clickable { onInspectUser() }
       ) {
-        Icon(
-          imageVector = Icons.Default.Add,
-          contentDescription = "Empty Seat",
-          tint = TextSecondary,
-          modifier = Modifier.size(20.dp)
-        )
+        // Outer Speaking Animated Glow Ring (Double ring)
+        if (seat.isSpeaking) {
+          Box(
+            modifier = Modifier
+              .size(60.dp * speakingPulse)
+              .clip(CircleShape)
+              .background(theme.speakingRingColor.copy(alpha = glowAlpha * 0.2f))
+              .border(2.dp, theme.speakingRingColor.copy(alpha = glowAlpha), CircleShape)
+          )
+        }
+
+        // Avatar Core Container
+        Box(
+          contentAlignment = Alignment.Center,
+          modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(
+              Brush.radialGradient(
+                listOf(
+                  theme.surfaceGlass,
+                  Color(0xFF0C0E1A)
+                )
+              )
+            )
+            .border(
+              width = if (seat.isSpeaking) 2.dp else if (seat.isOwner) 2.dp else 1.5.dp,
+              color = if (seat.isSpeaking) theme.speakingRingColor else if (seat.isOwner) Color(0xFFFBBF24) else theme.primaryAccent.copy(alpha = 0.8f),
+              shape = CircleShape
+            )
+        ) {
+          Text(
+            text = seat.username?.take(2)?.uppercase() ?: "??",
+            fontSize = 15.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = Color.White
+          )
+        }
+
+        // Owner / Admin Badge (Top right) with subtle glass background
+        if (seat.isOwner) {
+          Surface(
+            color = Color(0xCC000000),
+            shape = CircleShape,
+            modifier = Modifier
+              .align(Alignment.TopEnd)
+              .offset(x = 2.dp, y = (-2).dp)
+          ) {
+            Text(
+              text = "👑",
+              fontSize = 11.sp,
+              modifier = Modifier.padding(2.dp)
+            )
+          }
+        } else if (seat.isAdmin) {
+          Surface(
+            color = Color(0xCC000000),
+            shape = CircleShape,
+            modifier = Modifier
+              .align(Alignment.TopEnd)
+              .offset(x = 2.dp, y = (-2).dp)
+          ) {
+            Text(
+              text = "🛡️",
+              fontSize = 10.sp,
+              modifier = Modifier.padding(2.dp)
+            )
+          }
+        }
+
+        // Mute / Speaking Status (Bottom right)
+        Box(
+          modifier = Modifier
+            .size(18.dp)
+            .clip(CircleShape)
+            .background(if (seat.isMuted) Color(0xFFE11D48) else Color(0xFF10B981))
+            .border(1.5.dp, Color(0xFF0F172A), CircleShape)
+            .align(Alignment.BottomEnd),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(
+            imageVector = if (seat.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(11.dp)
+          )
+        }
       }
-      Spacer(modifier = Modifier.height(2.dp))
+
+      Spacer(modifier = Modifier.height(4.dp))
+
+      Text(
+        text = if (isCurrentUser) "You" else (seat.username ?: "User"),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = Color.White,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center
+      )
+    } else {
+      // Elegant Frosted Empty Seat
+      Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+          .size(62.dp)
+          .clickable { onTakeSeat() }
+          .testTag("empty_seat_${seat.seatIndex}")
+      ) {
+        Box(
+          contentAlignment = Alignment.Center,
+          modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(theme.seatItemEmptyBg)
+            .border(
+              width = 1.2.dp,
+              color = theme.seatItemEmptyBorder,
+              shape = CircleShape
+            )
+        ) {
+          Icon(
+            Icons.Default.Add,
+            contentDescription = "Take Seat",
+            tint = theme.primaryAccent.copy(alpha = 0.85f),
+            modifier = Modifier.size(20.dp)
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.height(4.dp))
+
       Text(
         text = "Seat ${seat.seatIndex + 1}",
         fontSize = 10.sp,
-        color = TextSecondary
+        color = Color.White.copy(alpha = 0.65f),
+        fontWeight = FontWeight.Medium,
+        textAlign = TextAlign.Center
       )
     }
   }
 }
 
 @Composable
-fun AudienceBar(
-  audienceCount: Int,
-  audienceMembers: List<AudienceMember>,
-  isUserSeated: Boolean,
-  hasRequestedSeat: Boolean,
-  canApproveRequests: Boolean,
-  onRequestSeat: () -> Unit,
-  onOpenRequests: () -> Unit
-) {
-  Surface(
-    color = Color(0xFF131A29),
-    modifier = Modifier.fillMaxWidth()
-  ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-      modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
-    ) {
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("👥", fontSize = 13.sp)
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-          text = "Audience: $audienceCount Watching",
-          fontSize = 12.sp,
-          fontWeight = FontWeight.SemiBold,
-          color = Color.White
-        )
-      }
-
-      Row(verticalAlignment = Alignment.CenterVertically) {
-        if (!isUserSeated) {
-          Button(
-            onClick = onRequestSeat,
-            enabled = !hasRequestedSeat,
-            colors = ButtonDefaults.buttonColors(
-              containerColor = if (hasRequestedSeat) DarkSurfaceElevated else VioletAudience
-            ),
-            shape = RoundedCornerShape(8.dp),
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-            modifier = Modifier.testTag("audience_request_seat_btn")
-          ) {
-            Text(
-              text = if (hasRequestedSeat) "Request Sent ✋" else "Request Seat",
-              fontSize = 11.sp,
-              fontWeight = FontWeight.Bold,
-              color = Color.White
-            )
-          }
-        }
-
-        if (canApproveRequests && audienceMembers.any { it.hasRequestedSeat }) {
-          Spacer(modifier = Modifier.width(6.dp))
-          TextButton(
-            onClick = onOpenRequests,
-            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-          ) {
-            Text("Review", color = EmeraldOnline, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-          }
-        }
-      }
-    }
-  }
-}
-
-@Composable
-fun ChatMessageItem(
+fun ThemedChatMessageItem(
   message: ChatMessage,
   currentUserId: String,
   canModerate: Boolean,
+  theme: ResolvedRoomTheme,
+  onAddReaction: (String) -> Unit,
   onDelete: () -> Unit,
-  onReport: () -> Unit,
-  onAddReaction: (String) -> Unit
+  onReport: () -> Unit
 ) {
-  if (message.isSystem) {
-    // System message
-    Surface(
-      color = DarkSurfaceElevated.copy(alpha = 0.6f),
-      shape = RoundedCornerShape(8.dp),
-      modifier = Modifier
-        .fillMaxWidth()
-        .padding(vertical = 2.dp)
-    ) {
-      Text(
-        text = "📢 ${message.text}",
-        fontSize = 11.sp,
-        color = AmberXp,
-        fontWeight = FontWeight.Medium,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-      )
-    }
-  } else {
-    // User message
-    var showMenu by remember { mutableStateOf(false) }
+  var showMenu by remember { mutableStateOf(false) }
+  val isGift = message.senderRole == "GIFT"
+  val isSystem = message.isSystem || message.senderRole == "SYSTEM"
 
-    Row(
+  if (isSystem) {
+    Box(
+      contentAlignment = Alignment.Center,
       modifier = Modifier
         .fillMaxWidth()
-        .padding(vertical = 2.dp)
+        .padding(vertical = 3.dp)
     ) {
-      Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-          .size(28.dp)
-          .clip(CircleShape)
-          .background(IndigoDark)
+      Surface(
+        color = Color.Black.copy(alpha = 0.35f),
+        shape = RoundedCornerShape(8.dp)
       ) {
-        Text(getInitials(message.senderName), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Text(
+          text = message.text,
+          fontSize = 10.sp,
+          color = Color.White.copy(alpha = 0.7f),
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+        )
+      }
+    }
+    return
+  }
+
+  if (isGift) {
+    // Celebratory gift pill
+    Surface(
+      color = theme.primaryAccent.copy(alpha = 0.18f),
+      shape = RoundedCornerShape(12.dp),
+      border = androidx.compose.foundation.BorderStroke(1.dp, theme.primaryAccent.copy(alpha = 0.4f)),
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(vertical = 3.dp)
+    ) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+      ) {
+        Text("🎁", fontSize = 16.sp)
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+          text = "${message.senderName} ${message.text}",
+          fontSize = 11.sp,
+          fontWeight = FontWeight.Bold,
+          color = Color(0xFFFBBF24)
+        )
+      }
+    }
+    return
+  }
+
+  // Standard user message
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .padding(vertical = 2.dp)
+  ) {
+    Column(modifier = Modifier.weight(1f)) {
+      Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+          text = message.senderName,
+          fontSize = 11.sp,
+          fontWeight = FontWeight.Bold,
+          color = Color.White
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        when (message.senderRole) {
+          "OWNER" -> {
+            Surface(
+              color = Color(0xFFF59E0B).copy(alpha = 0.25f),
+              shape = RoundedCornerShape(4.dp),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF59E0B))
+            ) {
+              Text("👑 OWNER", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFFF59E0B), modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+            }
+          }
+          "ADMIN" -> {
+            Surface(
+              color = Color(0xFF3B82F6).copy(alpha = 0.25f),
+              shape = RoundedCornerShape(4.dp),
+              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B82F6))
+            ) {
+              Text("🛡️ ADMIN", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = Color(0xFF60A5FA), modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+            }
+          }
+        }
       }
 
-      Spacer(modifier = Modifier.width(8.dp))
+      Surface(
+        color = if (message.senderId == currentUserId) theme.chatBubbleHighlight else Color.Black.copy(alpha = 0.35f),
+        shape = RoundedCornerShape(topStart = 0.dp, topEnd = 12.dp, bottomEnd = 12.dp, bottomStart = 12.dp),
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, Color.White.copy(alpha = 0.1f)),
+        modifier = Modifier
+          .padding(top = 2.dp)
+          .clickable { showMenu = !showMenu }
+      ) {
+        Text(
+          text = message.text,
+          fontSize = 12.sp,
+          color = Color.White,
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+        )
+      }
 
-      Column(modifier = Modifier.weight(1f)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-          Text(
-            text = message.senderName,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White
-          )
-          Spacer(modifier = Modifier.width(4.dp))
-          if (message.senderRole == "OWNER") {
-            OwnerBadge()
-          } else if (message.senderRole == "ADMIN") {
-            AdminBadge()
-          }
-        }
-
-        Surface(
-          color = if (message.senderId == currentUserId) IndigoDark.copy(alpha = 0.4f) else DarkSurfaceElevated,
-          shape = RoundedCornerShape(topStart = 0.dp, topEnd = 12.dp, bottomEnd = 12.dp, bottomStart = 12.dp),
-          modifier = Modifier
-            .padding(top = 2.dp)
-            .clickable { showMenu = !showMenu }
+      // Reactions
+      if (message.reactions.isNotEmpty()) {
+        Row(
+          horizontalArrangement = Arrangement.spacedBy(4.dp),
+          modifier = Modifier.padding(top = 2.dp)
         ) {
-          Text(
-            text = message.text,
-            fontSize = 13.sp,
-            color = TextPrimary,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-          )
-        }
-
-        // Reactions
-        if (message.reactions.isNotEmpty()) {
-          Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.padding(top = 2.dp)
-          ) {
-            message.reactions.forEach { (emoji, count) ->
-              Surface(
-                color = DarkSurfaceBorder,
-                shape = RoundedCornerShape(6.dp),
-                modifier = Modifier.clickable { onAddReaction(emoji) }
-              ) {
-                Text(
-                  text = "$emoji $count",
-                  fontSize = 10.sp,
-                  color = Color.White,
-                  modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                )
-              }
-            }
-          }
-        }
-
-        if (showMenu) {
-          Row(modifier = Modifier.padding(top = 2.dp)) {
-            if (message.senderId == currentUserId || canModerate) {
+          message.reactions.forEach { (emoji, count) ->
+            Surface(
+              color = Color.Black.copy(alpha = 0.4f),
+              shape = RoundedCornerShape(6.dp),
+              border = androidx.compose.foundation.BorderStroke(0.5.dp, Color.White.copy(alpha = 0.2f)),
+              modifier = Modifier.clickable { onAddReaction(emoji) }
+            ) {
               Text(
-                text = "Delete",
-                color = RoseError,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier
-                  .clickable { onDelete() }
-                  .padding(end = 12.dp)
+                text = "$emoji $count",
+                fontSize = 9.sp,
+                color = Color.White,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
               )
             }
+          }
+        }
+      }
+
+      if (showMenu) {
+        Row(modifier = Modifier.padding(top = 2.dp)) {
+          if (message.senderId == currentUserId || canModerate) {
             Text(
-              text = "Report",
-              color = TextSecondary,
-              fontSize = 10.sp,
-              modifier = Modifier.clickable { onReport() }
+              text = "Delete",
+              color = Color(0xFFF43F5E),
+              fontSize = 9.sp,
+              fontWeight = FontWeight.Bold,
+              modifier = Modifier
+                .clickable { onDelete() }
+                .padding(end = 12.dp)
             )
           }
+          Text(
+            text = "Report",
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 9.sp,
+            modifier = Modifier.clickable { onReport() }
+          )
         }
       }
     }
@@ -1004,22 +1307,22 @@ fun VideoSelectDialog(
 
   Dialog(onDismissRequest = onDismiss) {
     Card(
-      colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+      colors = CardDefaults.cardColors(containerColor = Color(0xFF131626)),
       shape = RoundedCornerShape(24.dp),
-      border = androidx.compose.foundation.BorderStroke(1.dp, DarkSurfaceBorder),
+      border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
       modifier = Modifier
         .fillMaxWidth()
         .padding(16.dp)
     ) {
       Column(modifier = Modifier.padding(20.dp)) {
-        Text("Select Synchronized Stream 🎬", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        Text("All room participants will synchronize to this video.", fontSize = 12.sp, color = TextSecondary)
+        Text("Select Synchronized Stream 🎬", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Text("All room participants synchronize to this video stream.", fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f))
 
         Spacer(modifier = Modifier.height(14.dp))
 
         videoStreams.forEach { (title, dur) ->
           Surface(
-            color = DarkSurfaceElevated,
+            color = Color(0xFF1A1E32),
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier
               .fillMaxWidth()
@@ -1030,11 +1333,11 @@ fun VideoSelectDialog(
               verticalAlignment = Alignment.CenterVertically,
               modifier = Modifier.padding(10.dp)
             ) {
-              Icon(Icons.Default.PlayCircleOutline, contentDescription = null, tint = IndigoLight)
+              Icon(Icons.Default.PlayCircleOutline, contentDescription = null, tint = Color(0xFF06B6D4))
               Spacer(modifier = Modifier.width(8.dp))
               Column(modifier = Modifier.weight(1f)) {
-                Text(title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                Text(formatSeconds(dur), color = TextSecondary, fontSize = 10.sp)
+                Text(title, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(formatSeconds(dur), color = Color.White.copy(alpha = 0.5f), fontSize = 10.sp)
               }
             }
           }
@@ -1043,7 +1346,6 @@ fun VideoSelectDialog(
         Spacer(modifier = Modifier.height(12.dp))
         Button(
           onClick = onDismiss,
-          colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceElevated),
           shape = RoundedCornerShape(10.dp),
           modifier = Modifier.fillMaxWidth()
         ) {

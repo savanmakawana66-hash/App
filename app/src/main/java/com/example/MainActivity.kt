@@ -9,14 +9,21 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -24,8 +31,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.model.*
+import com.example.data.model.games.*
 import com.example.ui.components.*
 import com.example.ui.screens.dm.DmScreen
+import com.example.ui.screens.games.*
 import com.example.ui.screens.notifications.NotificationsSheet
 import com.example.ui.screens.profile.EditProfileDialog
 import com.example.ui.screens.profile.ProfileScreen
@@ -75,6 +84,11 @@ fun WatchTogetherApp(
   val searchQuery by viewModel.searchQuery.collectAsState()
   val selectedCategory by viewModel.selectedCategory.collectAsState()
 
+  // Virtual Coin Wallet & Daily Tasks states
+  val coinWalletState by viewModel.coinWalletState.collectAsState()
+  val showDailyTasksDialog by viewModel.showDailyTasksDialog.collectAsState()
+  val showCoinHistoryDialog by viewModel.showCoinHistoryDialog.collectAsState()
+
   // Dialog & Modal state collectors
   val inspectedUser by viewModel.inspectedUser.collectAsState()
   val showOtpDialog by viewModel.showOtpDialog.collectAsState()
@@ -96,12 +110,22 @@ fun WatchTogetherApp(
   val showHostWatchPartyDialog by viewModel.showHostWatchPartyDialog.collectAsState()
   val showJoinWatchPartyDialog by viewModel.showJoinWatchPartyDialog.collectAsState()
 
+  // Real-Time Games States
+  val activeGameSession by viewModel.activeGameSession.collectAsState()
+  val isMatchmaking by viewModel.isMatchmaking.collectAsState()
+  val matchmakingGameType by viewModel.matchmakingGameType.collectAsState()
+  val showInviteFriendForGame by viewModel.showInviteFriendForGame.collectAsState()
+  val showJoinGameCodeDialog by viewModel.showJoinGameCodeDialog.collectAsState()
+  val pendingGameInvites by viewModel.pendingGameInvites.collectAsState()
+  val connectionStatus by viewModel.connectionStatus.collectAsState()
+
   // Audio permission launcher
   val audioPermissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestPermission()
   ) { isGranted ->
     if (isGranted) {
       Toast.makeText(context, "Microphone enabled", Toast.LENGTH_SHORT).show()
+      viewModel.networkEngine.voiceRoomManager.onPermissionGranted()
     } else {
       Toast.makeText(context, "Microphone permission required for voice chat", Toast.LENGTH_SHORT).show()
     }
@@ -117,7 +141,35 @@ fun WatchTogetherApp(
   Box(modifier = Modifier.fillMaxSize()) {
     // Top-Level Screen Routing
     when {
-      // 0. Active Watch Party & Voice Room (Local Media Streaming to Remote Friends)
+      // 0. Active Real-Time Game Session (Chess or Ludo)
+      activeGameSession != null -> {
+        when (activeGameSession!!.gameType) {
+          GameType.CHESS -> {
+            ChessGameScreen(
+              session = activeGameSession!!,
+              currentUserId = currentUser.id,
+              onMakeMove = { from, to -> viewModel.makeChessMove(from, to) },
+              onResign = { viewModel.resignChess() },
+              onOfferDraw = { viewModel.offerChessDraw() },
+              onRespondDraw = { accept -> viewModel.respondChessDraw(accept) },
+              onRequestRematch = { viewModel.requestGameRematch() },
+              onLeaveGame = { viewModel.leaveActiveGame() }
+            )
+          }
+          GameType.LUDO -> {
+            LudoGameScreen(
+              session = activeGameSession!!,
+              currentUserId = currentUser.id,
+              onRollDice = { viewModel.rollLudoDice() },
+              onMoveToken = { tokenId -> viewModel.moveLudoToken(tokenId) },
+              onRequestRematch = { viewModel.requestGameRematch() },
+              onLeaveGame = { viewModel.leaveActiveGame() }
+            )
+          }
+        }
+      }
+
+      // 1. Active Watch Party & Voice Room (Local Media Streaming to Remote Friends)
       activeWatchParty != null -> {
         WatchPartyStageScreen(
           engine = viewModel.networkEngine,
@@ -160,7 +212,18 @@ fun WatchTogetherApp(
           onInspectUser = { friend -> viewModel.inspectUser(friend) },
           onOpenRoomSettings = { viewModel.openRoomSettings() },
           onOpenInvite = { viewModel.openInviteFriend() },
-          onReportMessage = { msgId, senderName -> viewModel.openReport("Message", msgId, senderName) }
+          onReportMessage = { msgId, senderName -> viewModel.openReport("Message", msgId, senderName) },
+          onSendGift = { giftName, emoji, cost -> viewModel.sendRoomGift(currentActiveRoom!!.id, giftName, emoji, cost) },
+          onToggleFollowRoom = { viewModel.toggleFollowRoom(currentActiveRoom!!.id) },
+          onUpdateVideoAudioSettings = { videoVol, isMuted, micVol -> viewModel.updateVideoAudioSettings(currentActiveRoom!!.id, videoVol, isMuted, micVol) },
+          onUpdateRoomTheme = { themeId, config -> viewModel.updateRoomTheme(currentActiveRoom!!.id, themeId, config) },
+          onUpdateRoomFullConfig = { name, desc, ann, mode, locked, seatPerm, chatPerm, isVid, isGame, gameType ->
+            viewModel.updateRoomFullConfig(currentActiveRoom!!.id, name, desc, ann, mode, locked, seatPerm, chatPerm, isVid, isGame, gameType)
+          },
+          onSetRoomGame = { gameType, isEnabled -> viewModel.setRoomGame(currentActiveRoom!!.id, gameType, isEnabled) },
+          onAddAdmin = { userId, username -> viewModel.addRoomAdmin(currentActiveRoom!!.id, userId, username) },
+          onRemoveAdmin = { userId -> viewModel.removeRoomAdmin(currentActiveRoom!!.id, userId) },
+          onDeleteRoom = { viewModel.deleteRoom(currentActiveRoom!!.id) }
         )
       }
 
@@ -209,103 +272,61 @@ fun WatchTogetherApp(
         Scaffold(
           containerColor = DarkBackground,
           bottomBar = {
-            // STRICT SPECIFICATION: ONLY 3 PRIMARY BOTTOM-NAVIGATION SECTIONS
-            NavigationBar(
-              containerColor = DarkSurface,
-              tonalElevation = 8.dp,
+            // PREMIUM BOTTOM NAVIGATION
+            Surface(
+              color = DarkSurface,
+              border = androidx.compose.foundation.BorderStroke(1.dp, DarkSurfaceBorder),
+              tonalElevation = 6.dp,
               modifier = Modifier
                 .fillMaxWidth()
                 .testTag("primary_bottom_navigation")
             ) {
-              // 1. 🏠 ROOM
-              NavigationBarItem(
-                selected = currentTab == BottomNavTab.ROOM,
-                onClick = { viewModel.selectTab(BottomNavTab.ROOM) },
-                icon = {
-                  Icon(
-                    imageVector = if (currentTab == BottomNavTab.ROOM) Icons.Default.MeetingRoom else Icons.Outlined.MeetingRoom,
-                    contentDescription = "ROOM"
-                  )
-                },
-                label = {
-                  Text(
-                    text = "🏠 ROOM",
-                    fontSize = 11.sp,
-                    fontWeight = if (currentTab == BottomNavTab.ROOM) FontWeight.Bold else FontWeight.Normal
-                  )
-                },
-                colors = NavigationBarItemDefaults.colors(
-                  selectedIconColor = IndigoLight,
-                  selectedTextColor = IndigoLight,
-                  indicatorColor = IndigoDark,
-                  unselectedIconColor = TextSecondary,
-                  unselectedTextColor = TextSecondary
-                ),
-                modifier = Modifier.testTag("tab_room")
-              )
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .navigationBarsPadding()
+                  .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceAround,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                // 1. HOME
+                PremiumBottomNavItem(
+                  selected = currentTab == BottomNavTab.ROOM,
+                  onClick = { viewModel.selectTab(BottomNavTab.ROOM) },
+                  icon = if (currentTab == BottomNavTab.ROOM) Icons.Default.MeetingRoom else Icons.Outlined.MeetingRoom,
+                  label = "HOME",
+                  testTag = "tab_room"
+                )
 
-              // 2. 💬 DM
-              NavigationBarItem(
-                selected = currentTab == BottomNavTab.DM,
-                onClick = { viewModel.selectTab(BottomNavTab.DM) },
-                icon = {
-                  val hasPending = friends.any { it.friendshipStatus == com.example.data.model.FriendshipStatus.PENDING }
-                  BadgedBox(
-                    badge = {
-                      if (hasPending) {
-                        Badge(containerColor = AmberXp)
-                      }
-                    }
-                  ) {
-                    Icon(
-                      imageVector = if (currentTab == BottomNavTab.DM) Icons.Default.ChatBubble else Icons.Outlined.ChatBubbleOutline,
-                      contentDescription = "DM"
-                    )
-                  }
-                },
-                label = {
-                  Text(
-                    text = "💬 DM",
-                    fontSize = 11.sp,
-                    fontWeight = if (currentTab == BottomNavTab.DM) FontWeight.Bold else FontWeight.Normal
-                  )
-                },
-                colors = NavigationBarItemDefaults.colors(
-                  selectedIconColor = IndigoLight,
-                  selectedTextColor = IndigoLight,
-                  indicatorColor = IndigoDark,
-                  unselectedIconColor = TextSecondary,
-                  unselectedTextColor = TextSecondary
-                ),
-                modifier = Modifier.testTag("tab_dm")
-              )
+                // 2. DM
+                val hasPending = friends.any { it.friendshipStatus == com.example.data.model.FriendshipStatus.PENDING }
+                PremiumBottomNavItem(
+                  selected = currentTab == BottomNavTab.DM,
+                  onClick = { viewModel.selectTab(BottomNavTab.DM) },
+                  icon = if (currentTab == BottomNavTab.DM) Icons.Default.ChatBubble else Icons.Outlined.ChatBubbleOutline,
+                  label = "DM",
+                  testTag = "tab_dm",
+                  badgeCount = if (hasPending) 1 else 0
+                )
 
-              // 3. 👤 PROFILE
-              NavigationBarItem(
-                selected = currentTab == BottomNavTab.PROFILE,
-                onClick = { viewModel.selectTab(BottomNavTab.PROFILE) },
-                icon = {
-                  Icon(
-                    imageVector = if (currentTab == BottomNavTab.PROFILE) Icons.Default.Person else Icons.Outlined.Person,
-                    contentDescription = "PROFILE"
-                  )
-                },
-                label = {
-                  Text(
-                    text = "👤 PROFILE",
-                    fontSize = 11.sp,
-                    fontWeight = if (currentTab == BottomNavTab.PROFILE) FontWeight.Bold else FontWeight.Normal
-                  )
-                },
-                colors = NavigationBarItemDefaults.colors(
-                  selectedIconColor = IndigoLight,
-                  selectedTextColor = IndigoLight,
-                  indicatorColor = IndigoDark,
-                  unselectedIconColor = TextSecondary,
-                  unselectedTextColor = TextSecondary
-                ),
-                modifier = Modifier.testTag("tab_profile")
-              )
+                // 3. GAMES
+                PremiumBottomNavItem(
+                  selected = currentTab == BottomNavTab.GAMES,
+                  onClick = { viewModel.selectTab(BottomNavTab.GAMES) },
+                  icon = if (currentTab == BottomNavTab.GAMES) Icons.Default.SportsEsports else Icons.Outlined.SportsEsports,
+                  label = "GAMES",
+                  testTag = "tab_games"
+                )
+
+                // 4. PROFILE
+                PremiumBottomNavItem(
+                  selected = currentTab == BottomNavTab.PROFILE,
+                  onClick = { viewModel.selectTab(BottomNavTab.PROFILE) },
+                  icon = if (currentTab == BottomNavTab.PROFILE) Icons.Default.Person else Icons.Outlined.Person,
+                  label = "PROFILE",
+                  testTag = "tab_profile"
+                )
+              }
             }
           }
         ) { paddingValues ->
@@ -333,7 +354,8 @@ fun WatchTogetherApp(
                   onActiveRoomSessionClick = { session -> viewModel.joinActiveRoomSession(session) },
                   onToggleFavourite = { rId -> viewModel.toggleFavourite(rId) },
                   onOpenNotifications = { viewModel.openNotifications() },
-                  onVerifyGuestClick = { viewModel.openOtpDialog() }
+                  onVerifyGuestClick = { viewModel.openOtpDialog() },
+                  onOpenProfile = { viewModel.selectTab(BottomNavTab.PROFILE) }
                 )
               }
 
@@ -354,7 +376,19 @@ fun WatchTogetherApp(
                   onRejectFriendRequest = { uId -> viewModel.rejectFriendRequest(uId) },
                   onSendFriendRequest = { uId, uname -> viewModel.sendFriendRequest(uId, uname) },
                   onInspectUser = { f -> viewModel.inspectUser(f) },
-                  onJoinRoomFromInvite = { rId -> viewModel.joinRoom(rId) }
+                  onJoinRoomFromInvite = { rId -> viewModel.joinRoom(rId) },
+                  onChallengeGame = { friend, gType -> viewModel.challengeFriendToGame(friend, gType) },
+                  onAcceptGameInvite = { inviteId -> viewModel.acceptGameInvite(inviteId) },
+                  pendingGameInvites = pendingGameInvites
+                )
+              }
+
+              BottomNavTab.GAMES -> {
+                GamesHomeScreen(
+                  currentUser = currentUser,
+                  onPlayRandom = { gType -> viewModel.startMatchmaking(gType) },
+                  onPlayWithFriend = { gType -> viewModel.openPlayWithFriend(gType) },
+                  onJoinByCode = { viewModel.openJoinGameCode() }
                 )
               }
 
@@ -362,6 +396,10 @@ fun WatchTogetherApp(
                 ProfileScreen(
                   currentUser = currentUser,
                   rooms = filteredRooms,
+                  coinWalletState = coinWalletState,
+                  onOpenDailyTasks = { viewModel.openDailyTasks() },
+                  onOpenCoinHistory = { viewModel.openCoinHistory() },
+                  onAddTestBonus = { viewModel.addTestCoins(600) },
                   onOpenEditProfile = { viewModel.openEditProfile() },
                   onOpenSettings = { viewModel.openSettings() },
                   onOpenOtpVerification = { viewModel.openOtpDialog() },
@@ -377,6 +415,23 @@ fun WatchTogetherApp(
 
     // Modal Dialogs Layer
 
+    // Daily Tasks Modal
+    if (showDailyTasksDialog) {
+      DailyTasksDialog(
+        walletState = coinWalletState,
+        onClaimTask = { taskId -> viewModel.claimDailyTask(taskId) },
+        onDismiss = { viewModel.closeDailyTasks() }
+      )
+    }
+
+    // Authoritative Coin History Modal
+    if (showCoinHistoryDialog) {
+      CoinHistoryDialog(
+        walletState = coinWalletState,
+        onDismiss = { viewModel.closeCoinHistory() }
+      )
+    }
+
     // OTP Verification Modal
     if (showOtpDialog) {
       OtpVerificationDialog(
@@ -389,6 +444,7 @@ fun WatchTogetherApp(
     if (showCreateRoomDialog) {
       CreateRoomDialog(
         onDismiss = { viewModel.closeCreateRoomDialog() },
+        userCoins = coinWalletState.balance,
         onCreate = { name, desc, isPrivate, pass, welcome, rules, cat ->
           viewModel.createRoom(name, desc, isPrivate, pass, welcome, rules, cat)
         }
@@ -553,5 +609,166 @@ fun WatchTogetherApp(
         }
       )
     }
+
+    // Matchmaking Searching Dialog (Strictly Real Players Only)
+    if (isMatchmaking) {
+      MatchmakingSearchingDialog(
+        gameType = matchmakingGameType,
+        isSearching = isMatchmaking,
+        onCancel = { viewModel.cancelMatchmaking() },
+        onRetry = { viewModel.startMatchmaking(matchmakingGameType) }
+      )
+    }
+
+    // Play with Friend Dialog
+    showInviteFriendForGame?.let { gType ->
+      GameInviteFriendDialog(
+        gameType = gType,
+        friends = friends,
+        onInviteFriend = { friend -> viewModel.challengeFriendToGame(friend, gType) },
+        onCreatePrivateCode = { viewModel.createPrivateGame(gType) },
+        onDismiss = { viewModel.closePlayWithFriend() }
+      )
+    }
+
+    // Join Game Code Dialog
+    if (showJoinGameCodeDialog) {
+      JoinGameCodeDialog(
+        onJoinCode = { code -> viewModel.joinGameByCode(code) },
+        onDismiss = { viewModel.closeJoinGameCode() }
+      )
+    }
+
+    // Incoming Game Challenge Alert (Real-time invite reception)
+    val incomingGameInvite = pendingGameInvites.firstOrNull { it.recipientId == currentUser.id }
+    if (incomingGameInvite != null && activeGameSession == null) {
+      AlertDialog(
+        onDismissRequest = { viewModel.declineGameInvite(incomingGameInvite.inviteId) },
+        containerColor = DarkSurface,
+        title = {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(incomingGameInvite.gameType.icon, fontSize = 24.sp)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Game Challenge!", fontWeight = FontWeight.Bold, color = Color.White, fontSize = 16.sp)
+          }
+        },
+        text = {
+          Column {
+            Text(
+              text = "${incomingGameInvite.senderName} challenged you to play ${incomingGameInvite.gameType.displayName}!",
+              fontSize = 14.sp,
+              color = Color.White
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text("Real-time match is waiting for you.", fontSize = 12.sp, color = TextSecondary)
+          }
+        },
+        confirmButton = {
+          Button(
+            onClick = { viewModel.acceptGameInvite(incomingGameInvite.inviteId) },
+            colors = ButtonDefaults.buttonColors(containerColor = EmeraldOnline)
+          ) {
+            Text("Accept & Play", fontWeight = FontWeight.Bold)
+          }
+        },
+        dismissButton = {
+          TextButton(onClick = { viewModel.declineGameInvite(incomingGameInvite.inviteId) }) {
+            Text("Decline", color = TextSecondary)
+          }
+        }
+      )
+    }
+
+    // Internet Connectivity Status Banner (Offline / Reconnecting)
+    if (connectionStatus != com.example.network.ConnectionStatus.ONLINE) {
+      Surface(
+        color = if (connectionStatus == com.example.network.ConnectionStatus.OFFLINE) Color(0xFFC62828) else Color(0xFFEF6C00),
+        modifier = Modifier
+          .fillMaxWidth()
+          .align(Alignment.TopCenter)
+      ) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.Center
+        ) {
+          Icon(
+            imageVector = if (connectionStatus == com.example.network.ConnectionStatus.OFFLINE) Icons.Default.WifiOff else Icons.Default.Sync,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(16.dp)
+          )
+          Spacer(modifier = Modifier.width(8.dp))
+          Text(
+            text = if (connectionStatus == com.example.network.ConnectionStatus.OFFLINE)
+              "You are offline. Reconnecting automatically when online."
+            else
+              "Reconnecting to secure server…",
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium
+          )
+        }
+      }
+    }
   }
 }
+
+@Composable
+private fun PremiumBottomNavItem(
+  selected: Boolean,
+  onClick: () -> Unit,
+  icon: ImageVector,
+  label: String,
+  testTag: String,
+  badgeCount: Int = 0
+) {
+  Box(
+    modifier = Modifier
+      .clip(RoundedCornerShape(22.dp))
+      .then(
+        if (selected) {
+          Modifier.background(Brush.horizontalGradient(listOf(BrandPrimary, MagentaAccent)))
+        } else {
+          Modifier
+        }
+      )
+      .clickable(onClick = onClick)
+      .padding(horizontal = if (selected) 16.dp else 12.dp, vertical = 9.dp)
+      .testTag(testTag),
+    contentAlignment = Alignment.Center
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.Center
+    ) {
+      BadgedBox(
+        badge = {
+          if (badgeCount > 0) {
+            Badge(containerColor = AmberXp)
+          }
+        }
+      ) {
+        Icon(
+          imageVector = icon,
+          contentDescription = label,
+          tint = if (selected) Color.White else TextSecondary,
+          modifier = Modifier.size(20.dp)
+        )
+      }
+      if (selected) {
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+          text = label,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.Bold,
+          color = Color.White
+        )
+      }
+    }
+  }
+}
+

@@ -2,5 +2,6 @@
     <string name="app_name">Watch Together</string>
     <string name="tab_room">Room</string>
     <string name="tab_dm">DM</string>
+    <string name="tab_games">Games</string>
     <string name="tab_profile">Profile</string>
 </resources>

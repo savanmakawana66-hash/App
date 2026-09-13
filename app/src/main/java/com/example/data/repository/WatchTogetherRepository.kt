@@ -14,9 +14,18 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-class WatchTogetherRepository {
+class WatchTogetherRepository(context: android.content.Context? = null) {
 
   private val scope = CoroutineScope(Dispatchers.Default)
+
+  val secureStorage = context?.let { com.example.data.security.SecureStorageManager(it) }
+  val backendApi = context?.let { ctx -> secureStorage?.let { sec -> com.example.network.api.RealBackendApiClient(ctx, sec) } }
+  val connectivityMonitor = context?.let { com.example.network.NetworkConnectivityMonitor(it) }
+  val signalingClient = secureStorage?.let { com.example.network.webrtc.SecureWebSocketSignalingClient(it) }
+
+  private val _fallbackStatus = MutableStateFlow(com.example.network.ConnectionStatus.ONLINE)
+  val connectionStatus: StateFlow<com.example.network.ConnectionStatus> =
+    connectivityMonitor?.status ?: _fallbackStatus.asStateFlow()
 
   // -------------------------------------------------------------
   // CURRENT USER STATE (Guest -> Mobile OTP Verified Account)
@@ -105,11 +114,70 @@ class WatchTogetherRepository {
     _eventMessages.tryEmit(message)
   }
 
+  // -------------------------------------------------------------
+  // SERVER-AUTHORITATIVE VIRTUAL COIN SYSTEM
+  // -------------------------------------------------------------
+  private val _coinWalletState = MutableStateFlow(
+    com.example.network.security.ServerCoinManager.getWalletState(initialUserId)
+  )
+  val coinWalletState: StateFlow<CoinWalletState> = _coinWalletState.asStateFlow()
+
+  fun refreshCoinWallet() {
+    val uId = _currentUser.value.id
+    val newState = com.example.network.security.ServerCoinManager.getWalletState(uId)
+    _coinWalletState.value = newState
+    _currentUser.update { it.copy(coins = newState.balance) }
+  }
+
+  fun claimDailyTask(taskId: String): Boolean {
+    val uId = _currentUser.value.id
+    val res = com.example.network.security.ServerCoinManager.claimDailyTask(uId, taskId)
+    if (res.isSuccess) {
+      val txn = res.getOrNull()
+      refreshCoinWallet()
+      _eventMessages.tryEmit("Claimed +${txn?.amount ?: 20} Coins! 🪙 (${txn?.reason})")
+      return true
+    } else {
+      _eventMessages.tryEmit(res.exceptionOrNull()?.message ?: "Could not claim task.")
+      return false
+    }
+  }
+
+  fun addTestCoins(amount: Int) {
+    val uId = _currentUser.value.id
+    val txn = com.example.network.security.ServerCoinManager.addTestCoins(uId, amount)
+    refreshCoinWallet()
+    _eventMessages.tryEmit("Bonus +$amount Coins added! Balance: ${txn.resultingBalance} 🪙")
+  }
+
   // Anti-farming trackers
   private var lastChatMessageTime = 0L
   private var lastVoiceXpAwardTime = 0L
 
   init {
+    com.example.network.security.ServerCoinManager.initialize(secureStorage, initialUserId)
+    refreshCoinWallet()
+
+    // Restore verified credentials from Android KeyStore secure storage if present
+    secureStorage?.let { sec ->
+      val savedPhone = sec.getSecureString(com.example.data.security.SecureStorageManager.KEY_PHONE_NUMBER)
+      val savedToken = sec.getSecureString(com.example.data.security.SecureStorageManager.KEY_ACCESS_TOKEN)
+      if (!savedPhone.isNullOrBlank() && !savedToken.isNullOrBlank()) {
+        val session = com.example.network.security.BackendSecurityController.validateAccessToken(savedToken)
+        if (session != null) {
+          _currentUser.update {
+            it.copy(
+              id = session.userId,
+              phoneNumber = savedPhone,
+              isGuest = false,
+              isVerified = true,
+              permanentLoginUntil = session.expiresAtMs
+            )
+          }
+        }
+      }
+    }
+
     seedInitialData()
     startSynchronizedClockLoop()
   }
@@ -282,6 +350,34 @@ class WatchTogetherRepository {
             }
           }
         }
+
+        // Server-authoritative genuine activity verification
+        val currentUserId = _currentUser.value.id
+        val isUserSeated = _roomSeats.value.any { it.userId == currentUserId }
+        if (isUserSeated) {
+          com.example.network.security.ServerCoinManager.recordActivity(
+            currentUserId,
+            com.example.data.model.CoinTaskType.VOICE_ROOM_ACTIVITY,
+            1
+          )
+        }
+
+        val activeRoom = _currentActiveRoom.value
+        if (activeRoom != null && activeRoom.isVideoPlaying) {
+          com.example.network.security.ServerCoinManager.recordActivity(
+            currentUserId,
+            com.example.data.model.CoinTaskType.WATCH_PARTY,
+            1
+          )
+        }
+
+        // Heartbeat for daily app presence
+        com.example.network.security.ServerCoinManager.recordActivity(
+          currentUserId,
+          com.example.data.model.CoinTaskType.DAILY_APP_ACTIVITY,
+          1
+        )
+        refreshCoinWallet()
       }
     }
   }
@@ -290,12 +386,32 @@ class WatchTogetherRepository {
   // AUTH / GUEST LINKING & OTP SYSTEM
   // -------------------------------------------------------------
   fun verifyMobileAndLinkAccount(phoneNumber: String, otpCode: String): Boolean {
+    val cleanPhone = phoneNumber.trim().replace("\\s+".toRegex(), "")
+    val cleanOtp = otpCode.trim()
+
+    // Server-side rate limiting to prevent brute force abuse
+    if (!com.example.network.security.BackendSecurityController.checkLoginRateLimit(cleanPhone)) {
+      _eventMessages.tryEmit("Too many attempts. Please wait 15 minutes before trying again.")
+      return false
+    }
+
     // Validates 6 digit OTP (accepts 123456 or any 6-digit input)
-    if (otpCode.length == 6 && phoneNumber.length >= 10) {
+    if (cleanOtp.length == 6 && cleanPhone.length >= 10) {
       val user = _currentUser.value
+
+      // Authoritative token issuance
+      val accessToken = com.example.network.security.BackendSecurityController.issueAccessToken(user.id, user.username, true)
+      val refreshToken = com.example.network.security.BackendSecurityController.issueRefreshToken(user.id)
+
+      // Encrypted storage in Android KeyStore AES-256-GCM
+      secureStorage?.saveSecureString(com.example.data.security.SecureStorageManager.KEY_ACCESS_TOKEN, accessToken)
+      secureStorage?.saveSecureString(com.example.data.security.SecureStorageManager.KEY_REFRESH_TOKEN, refreshToken)
+      secureStorage?.saveSecureString(com.example.data.security.SecureStorageManager.KEY_PHONE_NUMBER, cleanPhone)
+      secureStorage?.saveLong(com.example.data.security.SecureStorageManager.KEY_TOKEN_EXPIRY, System.currentTimeMillis() + 15 * 60 * 1000L)
+
       // Preserve: User ID, Username, Profile, Friends, Rooms, History, Achievements, XP, Settings!
       val updatedUser = user.copy(
-        phoneNumber = phoneNumber,
+        phoneNumber = phoneNumber.trim(),
         isGuest = false,
         isVerified = true,
         permanentLoginUntil = System.currentTimeMillis() + (15L * 86400000L) // 15-day session
@@ -314,10 +430,16 @@ class WatchTogetherRepository {
   }
 
   fun logout() {
+    val token = secureStorage?.getSecureString(com.example.data.security.SecureStorageManager.KEY_ACCESS_TOKEN)
+    val refreshToken = secureStorage?.getSecureString(com.example.data.security.SecureStorageManager.KEY_REFRESH_TOKEN)
+    com.example.network.security.BackendSecurityController.revokeSession(token, refreshToken)
+    secureStorage?.clearAllAuth()
+
     val user = _currentUser.value
     _currentUser.value = user.copy(
       permanentLoginUntil = 0L,
-      isVerified = false
+      isVerified = false,
+      phoneNumber = null
     )
     _eventMessages.tryEmit("Logged out successfully. Please re-verify via Mobile OTP.")
   }
@@ -542,6 +664,12 @@ class WatchTogetherRepository {
     _roomSeats.value = updatedSeats
     // Remove from audience
     _audienceMembers.update { it.filterNot { m -> m.userId == _currentUser.value.id } }
+    com.example.network.security.ServerCoinManager.recordActivity(
+      _currentUser.value.id,
+      com.example.data.model.CoinTaskType.VOICE_ROOM_ACTIVITY,
+      10
+    )
+    refreshCoinWallet()
     _eventMessages.tryEmit("You took Voice Seat ${seatIndex + 1} 🎙️")
     return true
   }
@@ -722,15 +850,18 @@ class WatchTogetherRepository {
   // -------------------------------------------------------------
   fun sendChatMessage(text: String): Boolean {
     val room = _currentActiveRoom.value ?: return false
-    val now = System.currentTimeMillis()
+    val user = _currentUser.value
 
-    // Anti-farming check (500ms cooldown)
-    if (now - lastChatMessageTime < 500) {
+    // Server-side rate limiting: 3 messages per 2 seconds
+    if (!com.example.network.security.BackendSecurityController.checkChatRateLimit(user.id)) {
+      _eventMessages.tryEmit("You are typing too fast. Please slow down.")
       return false
     }
-    lastChatMessageTime = now
 
-    val user = _currentUser.value
+    val sanitizedText = com.example.network.security.BackendSecurityController.sanitizeInput(text, 500)
+    if (sanitizedText.isBlank()) return false
+
+    val now = System.currentTimeMillis()
     val isOwner = room.ownerId == user.id
     val admins = _roomAdmins.value[room.id] ?: emptyList()
     val isAdmin = admins.any { it.userId == user.id }
@@ -743,11 +874,19 @@ class WatchTogetherRepository {
       senderName = user.username,
       senderAvatar = user.avatar,
       senderRole = role,
-      text = text.trim(),
+      text = sanitizedText,
       timestamp = now
     )
 
     _roomChatMessages.update { it + newMessage }
+
+    // Record server-authoritative social activity for daily tasks
+    com.example.network.security.ServerCoinManager.recordActivity(
+      user.id,
+      com.example.data.model.CoinTaskType.EXPLORE_SOCIAL,
+      1
+    )
+    refreshCoinWallet()
 
     // Award Room XP & Personal XP with rate limit
     awardRoomXp(room.id, 5, "Chat activity")
@@ -756,6 +895,13 @@ class WatchTogetherRepository {
   }
 
   fun addMessageReaction(messageId: String, emoji: String) {
+    com.example.network.security.ServerCoinManager.recordActivity(
+      _currentUser.value.id,
+      com.example.data.model.CoinTaskType.EXPLORE_SOCIAL,
+      1
+    )
+    refreshCoinWallet()
+
     _roomChatMessages.update { list ->
       list.map { msg ->
         if (msg.id == messageId) {
@@ -809,19 +955,47 @@ class WatchTogetherRepository {
     welcomeMessage: String,
     rules: String,
     category: RoomCategory = RoomCategory.WATCH_TOGETHER
-  ): Room {
-    val newId = "RM" + (1000..9999).random()
+  ): Room? {
     val user = _currentUser.value
+
+    // Server-Authoritative Coin validation: Permanent Room costs exactly 2,000 Coins
+    if (!com.example.network.security.ServerCoinManager.canAffordPermanentRoom(user.id)) {
+      val balance = com.example.network.security.ServerCoinManager.getBalance(user.id)
+      val remaining = com.example.network.security.ServerCoinManager.PERMANENT_ROOM_COST - balance
+      _eventMessages.tryEmit("Not enough Coins. Required: 2,000, Current: $balance, Remaining: $remaining")
+      return null
+    }
+
+    val sanitizedName = com.example.network.security.BackendSecurityController.sanitizeRoomName(name)
+    if (sanitizedName.isBlank()) {
+      _eventMessages.tryEmit("Please provide a valid room name")
+      return null
+    }
+
+    val newId = "RM" + (1000..9999).random()
+
+    // Deduct coins only when room validation passes and room is ready to be created
+    val deductionResult = com.example.network.security.ServerCoinManager.deductCoinsForPermanentRoom(user.id, newId, sanitizedName)
+    if (deductionResult.isFailure) {
+      _eventMessages.tryEmit("Payment failed: ${deductionResult.exceptionOrNull()?.message}")
+      return null
+    }
+    refreshCoinWallet()
+
+    val sanitizedDesc = com.example.network.security.BackendSecurityController.sanitizeInput(description, 150)
+    val sanitizedWelcome = com.example.network.security.BackendSecurityController.sanitizeInput(welcomeMessage, 150)
+    val sanitizedRules = com.example.network.security.BackendSecurityController.sanitizeInput(rules, 200)
+
     val newRoom = Room(
       id = newId,
-      name = name.trim(),
-      description = description.trim(),
+      name = sanitizedName,
+      description = sanitizedDesc,
       ownerId = user.id, // Permanent Owner
       ownerName = user.username,
       isPrivate = isPrivate,
       password = password,
-      welcomeMessage = welcomeMessage.ifBlank { "Welcome to $name! Enjoy synchronized watch parties." },
-      rules = rules.ifBlank { "1. Be respectful\n2. Have fun watching" },
+      welcomeMessage = sanitizedWelcome.ifBlank { "Welcome to $sanitizedName! Enjoy synchronized watch parties." },
+      rules = sanitizedRules.ifBlank { "1. Be respectful\n2. Have fun watching" },
       roomXp = 0,
       roomLevel = 1,
       videoControlMode = VideoControlMode.ADMINS_ONLY,
@@ -830,6 +1004,8 @@ class WatchTogetherRepository {
     )
 
     _rooms.update { listOf(newRoom) + it }
+    // Authoritatively register policy
+    com.example.network.security.BackendSecurityController.registerRoomPolicy(newRoom, password)
 
     // Register with real-time active session backend
     com.example.network.ActiveRoomSessionManager.createSession(
@@ -857,15 +1033,15 @@ class WatchTogetherRepository {
     )
 
     addPersonalXp(300, "Created Permanent Room")
-    _eventMessages.tryEmit("Permanent Room '$name' (ID: $newId) created successfully! 👑")
+    _eventMessages.tryEmit("Permanent Room '$name' created! (-2,000 Coins) 👑")
     return newRoom
   }
 
   fun deleteRoom(roomId: String): Boolean {
     val room = _rooms.value.find { it.id == roomId } ?: return false
-    // Only permanent owner can delete
-    if (room.ownerId != _currentUser.value.id) {
-      _eventMessages.tryEmit("Only the permanent Owner can delete this room.")
+    // Server-side authorization: only verified owner can delete room
+    if (!com.example.network.security.BackendSecurityController.canManageRoom(roomId, _currentUser.value.id)) {
+      _eventMessages.tryEmit("Access Denied: Only the permanent Owner can delete this room.")
       return false
     }
     _rooms.update { it.filterNot { r -> r.id == roomId } }
@@ -913,6 +1089,219 @@ class WatchTogetherRepository {
       }
     }
     _eventMessages.tryEmit("Room settings updated.")
+  }
+
+  fun updateRoomFullConfig(
+    roomId: String,
+    name: String,
+    description: String,
+    announcement: String,
+    videoControlMode: VideoControlMode,
+    isLocked: Boolean,
+    seatPermission: SeatPermission,
+    chatPermission: ChatPermission,
+    isVideoRoomEnabled: Boolean,
+    isGameEnabled: Boolean,
+    activeGameType: String?
+  ) {
+    _rooms.update { list ->
+      list.map { r ->
+        if (r.id == roomId) {
+          r.copy(
+            name = name,
+            description = description,
+            announcement = announcement,
+            videoControlMode = videoControlMode,
+            isLocked = isLocked,
+            seatPermission = seatPermission,
+            chatPermission = chatPermission,
+            isVideoRoomEnabled = isVideoRoomEnabled,
+            isGameEnabled = isGameEnabled,
+            activeGameType = activeGameType
+          )
+        } else r
+      }
+    }
+    if (_currentActiveRoom.value?.id == roomId) {
+      _currentActiveRoom.update {
+        it?.copy(
+          name = name,
+          description = description,
+          announcement = announcement,
+          videoControlMode = videoControlMode,
+          isLocked = isLocked,
+          seatPermission = seatPermission,
+          chatPermission = chatPermission,
+          isVideoRoomEnabled = isVideoRoomEnabled,
+          isGameEnabled = isGameEnabled,
+          activeGameType = activeGameType
+        )
+      }
+    }
+    _eventMessages.tryEmit("Room configuration updated successfully ✨")
+  }
+
+  fun updateRoomTheme(
+    roomId: String,
+    themeId: String,
+    customConfig: RoomThemeConfig?
+  ) {
+    _rooms.update { list ->
+      list.map { r ->
+        if (r.id == roomId) {
+          r.copy(themeId = themeId, customThemeConfig = customConfig)
+        } else r
+      }
+    }
+    if (_currentActiveRoom.value?.id == roomId) {
+      _currentActiveRoom.update {
+        it?.copy(themeId = themeId, customThemeConfig = customConfig)
+      }
+    }
+    _eventMessages.tryEmit("Room theme updated! 🎨")
+  }
+
+  fun updateRoomMediaStream(
+    roomId: String,
+    streamUrl: String,
+    title: String,
+    durationSec: Int,
+    quality: String = "HIGH"
+  ) {
+    _rooms.update { list ->
+      list.map { r ->
+        if (r.id == roomId) {
+          r.copy(
+            videoStreamUrl = streamUrl,
+            activeVideoTitle = title,
+            activeVideoDurationSec = durationSec,
+            activeVideoPosSec = 0f,
+            isVideoPlaying = true,
+            videoQuality = quality,
+            isVideoRoomEnabled = true
+          )
+        } else r
+      }
+    }
+    if (_currentActiveRoom.value?.id == roomId) {
+      _currentActiveRoom.update {
+        it?.copy(
+          videoStreamUrl = streamUrl,
+          activeVideoTitle = title,
+          activeVideoDurationSec = durationSec,
+          activeVideoPosSec = 0f,
+          isVideoPlaying = true,
+          videoQuality = quality,
+          isVideoRoomEnabled = true
+        )
+      }
+    }
+    postSystemMessage("🎬 Now streaming: $title [$quality]")
+    _eventMessages.tryEmit("Now streaming: $title")
+  }
+
+  fun updateVideoAudioSettings(
+    roomId: String,
+    videoVolume: Float,
+    isVideoMuted: Boolean,
+    micVolume: Float
+  ) {
+    val clampedVideoVol = videoVolume.coerceIn(0f, 1f)
+    val clampedMicVol = micVolume.coerceIn(0f, 1f)
+    _rooms.update { list ->
+      list.map { r ->
+        if (r.id == roomId) {
+          r.copy(
+            videoVolume = clampedVideoVol,
+            isVideoMuted = isVideoMuted,
+            micVolume = clampedMicVol
+          )
+        } else r
+      }
+    }
+    if (_currentActiveRoom.value?.id == roomId) {
+      _currentActiveRoom.update {
+        it?.copy(
+          videoVolume = clampedVideoVol,
+          isVideoMuted = isVideoMuted,
+          micVolume = clampedMicVol
+        )
+      }
+    }
+  }
+
+  fun toggleFollowRoom(roomId: String) {
+    _rooms.update { list ->
+      list.map { r ->
+        if (r.id == roomId) {
+          val newFollow = !r.isFollowed
+          val newCount = if (newFollow) r.followerCount + 1 else (r.followerCount - 1).coerceAtLeast(0)
+          r.copy(isFollowed = newFollow, followerCount = newCount)
+        } else r
+      }
+    }
+    if (_currentActiveRoom.value?.id == roomId) {
+      _currentActiveRoom.update {
+        val current = it ?: return@update null
+        val newFollow = !current.isFollowed
+        val newCount = if (newFollow) current.followerCount + 1 else (current.followerCount - 1).coerceAtLeast(0)
+        current.copy(isFollowed = newFollow, followerCount = newCount)
+      }
+    }
+    val followed = _currentActiveRoom.value?.isFollowed == true
+    _eventMessages.tryEmit(if (followed) "Room followed! 🌟" else "Room unfollowed.")
+  }
+
+  fun sendRoomGift(roomId: String, giftName: String, giftEmoji: String, coinCost: Int): Boolean {
+    val user = _currentUser.value
+    val deduction = com.example.network.security.ServerCoinManager.deductCoinsForGift(user.id, giftName, coinCost)
+    if (deduction.isFailure) {
+      val msg = deduction.exceptionOrNull()?.message ?: "Not enough coins"
+      _eventMessages.tryEmit(msg)
+      return false
+    }
+
+    refreshCoinWallet()
+
+    // Send visual gift celebration message
+    val msg = ChatMessage(
+      id = UUID.randomUUID().toString(),
+      roomId = roomId,
+      senderId = user.id,
+      senderName = user.username,
+      senderAvatar = user.avatar,
+      senderRole = "GIFT",
+      text = "sent $giftEmoji $giftName ($coinCost 🪙) to the room!",
+      timestamp = System.currentTimeMillis()
+    )
+    _roomChatMessages.update { it + msg }
+
+    awardRoomXp(roomId, coinCost * 2, "Room Gift: $giftName")
+    addPersonalXp(coinCost, "Sent Gift: $giftName")
+    _eventMessages.tryEmit("Sent $giftEmoji $giftName! (-$coinCost Coins) ✨")
+    return true
+  }
+
+  fun setRoomGame(roomId: String, gameType: String?, isEnabled: Boolean) {
+    _rooms.update { list ->
+      list.map { r ->
+        if (r.id == roomId) {
+          r.copy(isGameEnabled = isEnabled, activeGameType = gameType)
+        } else r
+      }
+    }
+    if (_currentActiveRoom.value?.id == roomId) {
+      _currentActiveRoom.update {
+        it?.copy(isGameEnabled = isEnabled, activeGameType = gameType)
+      }
+    }
+    if (isEnabled && gameType != null) {
+      postSystemMessage("🎮 Game started: $gameType")
+      _eventMessages.tryEmit("Game started: $gameType")
+    } else {
+      postSystemMessage("Game session ended.")
+      _eventMessages.tryEmit("Game closed.")
+    }
   }
 
   // -------------------------------------------------------------
@@ -1100,6 +1489,13 @@ class WatchTogetherRepository {
     )
     val currentThread = _directMessages.value[receiverId] ?: emptyList()
     _directMessages.update { it + (receiverId to (currentThread + msg)) }
+
+    com.example.network.security.ServerCoinManager.recordActivity(
+      user.id,
+      com.example.data.model.CoinTaskType.EXPLORE_SOCIAL,
+      1
+    )
+    refreshCoinWallet()
   }
 
   fun deleteDirectMessage(friendId: String, messageId: String) {

@@ -63,12 +63,48 @@ data class User(
   val watchHours: Float = 14.5f,
   val voiceHours: Float = 8.2f,
   val isBlocked: Boolean = false,
-  val isSuspended: Boolean = false
+  val isSuspended: Boolean = false,
+  val chessGames: Int = 25,
+  val chessWins: Int = 16,
+  val ludoGames: Int = 31,
+  val ludoWins: Int = 19,
+  val coins: Int = 1450
 ) {
   val xp: Int get() = personalXp
   val level: Int get() = personalLevel
   val frameName: String get() = profileFrame
 }
+
+enum class SeatPermission {
+  FREE_TO_SIT,
+  REQUIRE_APPROVAL
+}
+
+enum class ChatPermission {
+  EVERYONE,
+  SEATED_ONLY
+}
+
+enum class RoomBackgroundEffect {
+  AURORA,
+  STARS,
+  WAVES,
+  NEON_PULSE,
+  AMBIENT_GLOW
+}
+
+data class RoomThemeConfig(
+  val themeId: String = "midnight_aurora",
+  val primaryAccentHex: String = "#06B6D4",
+  val secondaryAccentHex: String = "#7C3AED",
+  val backgroundIntensity: Float = 0.85f,
+  val gradientIntensity: Float = 0.70f,
+  val glowIntensity: Float = 0.80f,
+  val glassTransparency: Float = 0.65f,
+  val borderBrightness: Float = 0.50f,
+  val ambientParticles: Boolean = true,
+  val backgroundEffect: RoomBackgroundEffect = RoomBackgroundEffect.AURORA
+)
 
 data class Room(
   val id: String, // e.g. "ABC7291"
@@ -92,7 +128,22 @@ data class Room(
   val activeVideoTitle: String = "Cyberpunk 2077 - Edgerunners Ep. 1",
   val activeVideoDurationSec: Int = 600,
   val activeVideoPosSec: Float = 145f,
-  val isVideoPlaying: Boolean = true
+  val isVideoPlaying: Boolean = true,
+  val announcement: String = "Welcome to our permanent voice room! Enjoy your time, keep chats respectful, and have fun!",
+  val themeId: String = "midnight_aurora",
+  val customThemeConfig: RoomThemeConfig? = null,
+  val seatPermission: SeatPermission = SeatPermission.FREE_TO_SIT,
+  val chatPermission: ChatPermission = ChatPermission.EVERYONE,
+  val isVideoRoomEnabled: Boolean = false,
+  val isGameEnabled: Boolean = false,
+  val activeGameType: String? = null,
+  val isFollowed: Boolean = false,
+  val followerCount: Int = 128,
+  val videoStreamUrl: String = "",
+  val videoVolume: Float = 1.0f,
+  val isVideoMuted: Boolean = false,
+  val micVolume: Float = 1.0f,
+  val videoQuality: String = "HIGH"
 )
 
 data class RoomSeat(
@@ -145,6 +196,12 @@ data class ChatMessage(
   val isSystem: Boolean = false
 )
 
+enum class MessageDeliveryStatus {
+  SENT,
+  DELIVERED,
+  READ
+}
+
 data class DirectMessage(
   val id: String,
   val senderId: String,
@@ -154,10 +211,18 @@ data class DirectMessage(
   val isRoomInvite: Boolean = false,
   val invitedRoomId: String? = null,
   val invitedRoomName: String? = null,
-  val reactions: Map<String, Int> = emptyMap()
+  val isGameInvite: Boolean = false,
+  val gameType: String? = null,
+  val gameMatchId: String? = null,
+  val gameInviteId: String? = null,
+  val reactions: Map<String, Int> = emptyMap(),
+  val status: MessageDeliveryStatus = MessageDeliveryStatus.READ,
+  val isVoiceNote: Boolean = false,
+  val voiceDurationSec: Int = 0
 ) {
   val roomId: String? get() = invitedRoomId
   val roomName: String? get() = invitedRoomName
+  val isRead: Boolean get() = status == MessageDeliveryStatus.READ
 }
 
 data class Friend(

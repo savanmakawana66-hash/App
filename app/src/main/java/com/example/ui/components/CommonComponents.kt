@@ -57,7 +57,7 @@ fun OwnerBadge(modifier: Modifier = Modifier) {
 @Composable
 fun AdminBadge(modifier: Modifier = Modifier) {
   Surface(
-    color = Color(0xFF0C3347),
+    color = Color(0xFF261D3D),
     shape = RoundedCornerShape(6.dp),
     border = androidx.compose.foundation.BorderStroke(1.dp, ShieldAdmin),
     modifier = modifier.testTag("admin_badge")
@@ -144,7 +144,7 @@ fun XPProgressBar(
           .clip(RoundedCornerShape(4.dp))
           .background(
             Brush.horizontalGradient(
-              listOf(IndigoPrimary, PurpleAccent, AmberXp)
+              listOf(BrandPrimary, MagentaAccent, AmberXp)
             )
           )
       )
@@ -166,12 +166,21 @@ fun SpeakingAvatar(
   val infiniteTransition = rememberInfiniteTransition(label = "speak_anim")
   val pulseScale by infiniteTransition.animateFloat(
     initialValue = 1.0f,
-    targetValue = if (isSpeaking) 1.15f else 1.0f,
+    targetValue = if (isSpeaking) 1.14f else 1.0f,
     animationSpec = infiniteRepeatable(
-      animation = tween(450, easing = FastOutSlowInEasing),
+      animation = tween(500, easing = FastOutSlowInEasing),
       repeatMode = RepeatMode.Reverse
     ),
     label = "pulse_scale"
+  )
+  val glowAlpha by infiniteTransition.animateFloat(
+    initialValue = 0.2f,
+    targetValue = if (isSpeaking) 0.6f else 0.0f,
+    animationSpec = infiniteRepeatable(
+      animation = tween(500, easing = LinearEasing),
+      repeatMode = RepeatMode.Reverse
+    ),
+    label = "glow_alpha"
   )
 
   Column(
@@ -184,15 +193,15 @@ fun SpeakingAvatar(
       contentAlignment = Alignment.Center,
       modifier = Modifier.size(size + 14.dp)
     ) {
-      // Pulsing speaking wave ring
+      // Subtle animated Electric Violet / Cyan ring when speaking (only while speaking)
       if (isSpeaking) {
         Box(
           modifier = Modifier
             .size(size + 12.dp)
             .scale(pulseScale)
             .clip(CircleShape)
-            .border(2.dp, EmeraldOnline, CircleShape)
-            .background(EmeraldOnline.copy(alpha = 0.15f))
+            .border(2.dp, BrandPrimary.copy(alpha = glowAlpha), CircleShape)
+            .background(BrandPrimary.copy(alpha = 0.12f))
         )
       }
 
@@ -205,8 +214,8 @@ fun SpeakingAvatar(
           .background(
             Brush.linearGradient(
               listOf(
-                Color(0xFF2C3E65),
-                Color(0xFF1E293B)
+                Color(0xFF271C3E),
+                Color(0xFF131322)
               )
             )
           )
@@ -243,22 +252,22 @@ fun SpeakingAvatar(
         )
       }
 
-      // Mute indicator overlay
+      // Clean muted icon (subtle dark badge, avoiding loud red UI)
       if (isMuted) {
         Box(
           contentAlignment = Alignment.Center,
           modifier = Modifier
-            .size(18.dp)
+            .size(17.dp)
             .align(Alignment.BottomEnd)
             .clip(CircleShape)
-            .background(RoseError)
-            .border(1.dp, Color.White, CircleShape)
+            .background(DarkSurfaceElevated)
+            .border(1.dp, DarkSurfaceBorder, CircleShape)
         ) {
           Icon(
             imageVector = Icons.Default.MicOff,
             contentDescription = "Muted",
-            tint = Color.White,
-            modifier = Modifier.size(11.dp)
+            tint = TextMuted,
+            modifier = Modifier.size(10.dp)
           )
         }
       }
@@ -268,7 +277,7 @@ fun SpeakingAvatar(
       text = username,
       fontSize = 11.sp,
       fontWeight = FontWeight.Medium,
-      color = if (isSpeaking) EmeraldOnline else TextPrimary,
+      color = if (isSpeaking) BrandVioletLight else TextPrimary,
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
       textAlign = TextAlign.Center,
@@ -286,10 +295,10 @@ fun ProfileFrameAvatar(
   onClick: (() -> Unit)? = null
 ) {
   val frameBorderBrush = when (frame) {
-    "Neon Purple" -> Brush.sweepGradient(listOf(IndigoPrimary, PurpleAccent, Color(0xFFE879F9), IndigoPrimary))
-    "Cosmic" -> Brush.sweepGradient(listOf(Color(0xFF38BDF8), Color(0xFF818CF8), Color(0xFFC084FC), Color(0xFF38BDF8)))
+    "Neon Purple" -> Brush.sweepGradient(listOf(BrandPrimary, MagentaAccent, BrandPrimary))
+    "Cosmic" -> Brush.sweepGradient(listOf(CyanAccent, BrandVioletLight, MagentaAccent, CyanAccent))
     "Gold VIP" -> Brush.sweepGradient(listOf(GoldOwner, Color(0xFFFDE047), GoldOwner, Color(0xFFD97706)))
-    else -> Brush.sweepGradient(listOf(DarkSurfaceBorder, DarkSurfaceBorder))
+    else -> Brush.sweepGradient(listOf(BrandPrimary.copy(alpha = 0.5f), CyanAccent.copy(alpha = 0.5f), BrandPrimary.copy(alpha = 0.5f)))
   }
 
   Box(
@@ -304,7 +313,7 @@ fun ProfileFrameAvatar(
       modifier = Modifier
         .size(size + 6.dp)
         .clip(CircleShape)
-        .border(3.dp, frameBorderBrush, CircleShape)
+        .border(2.5.dp, frameBorderBrush, CircleShape)
     )
 
     // Inner avatar
@@ -315,7 +324,7 @@ fun ProfileFrameAvatar(
         .clip(CircleShape)
         .background(
           Brush.linearGradient(
-            listOf(IndigoDark, DarkSurfaceElevated)
+            listOf(Color(0xFF261C3D), Color(0xFF141322))
           )
         )
     ) {
@@ -378,7 +387,7 @@ fun GuestVerificationReminderBanner(
       Spacer(modifier = Modifier.width(8.dp))
       Button(
         onClick = onVerifyClick,
-        colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
+        colors = ButtonDefaults.buttonColors(containerColor = BrandPrimary),
         shape = RoundedCornerShape(10.dp),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         modifier = Modifier.testTag("verify_now_btn")
@@ -403,57 +412,118 @@ fun EmptyStateView(
   onAction: (() -> Unit)? = null,
   modifier: Modifier = Modifier
 ) {
-  Column(
-    horizontalAlignment = Alignment.CenterHorizontally,
-    verticalArrangement = Arrangement.Center,
+  Card(
+    shape = RoundedCornerShape(22.dp),
+    colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+    border = androidx.compose.foundation.BorderStroke(1.dp, DarkCardBorderSubtle),
     modifier = modifier
       .fillMaxWidth()
-      .padding(32.dp)
+      .padding(horizontal = 4.dp, vertical = 8.dp)
   ) {
-    Box(
-      contentAlignment = Alignment.Center,
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center,
       modifier = Modifier
-        .size(64.dp)
-        .clip(CircleShape)
-        .background(DarkSurfaceElevated)
+        .fillMaxWidth()
+        .padding(horizontal = 24.dp, vertical = 32.dp)
     ) {
-      Icon(
-        imageVector = icon,
-        contentDescription = title,
-        tint = IndigoLight,
-        modifier = Modifier.size(32.dp)
-      )
-    }
-    Spacer(modifier = Modifier.height(16.dp))
-    Text(
-      text = title,
-      fontSize = 17.sp,
-      fontWeight = FontWeight.Bold,
-      color = TextPrimary,
-      textAlign = TextAlign.Center
-    )
-    Spacer(modifier = Modifier.height(6.dp))
-    Text(
-      text = subtitle,
-      fontSize = 13.sp,
-      color = TextSecondary,
-      textAlign = TextAlign.Center
-    )
-    if (actionText != null && onAction != null) {
-      Spacer(modifier = Modifier.height(18.dp))
-      Button(
-        onClick = onAction,
-        colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.testTag("empty_state_action_btn")
+      Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+          .size(72.dp)
+          .clip(CircleShape)
+          .background(
+            Brush.radialGradient(
+              listOf(
+                BrandPrimary.copy(alpha = 0.22f),
+                DarkSurfaceElevated
+              )
+            )
+          )
+          .border(1.dp, DarkCardBorderSubtle, CircleShape)
       ) {
-        Text(text = actionText, fontWeight = FontWeight.Bold)
+        Icon(
+          imageVector = icon,
+          contentDescription = title,
+          tint = BrandVioletLight,
+          modifier = Modifier.size(32.dp)
+        )
+      }
+      Spacer(modifier = Modifier.height(18.dp))
+      Text(
+        text = title,
+        fontSize = 17.sp,
+        fontWeight = FontWeight.Bold,
+        color = Color.White,
+        textAlign = TextAlign.Center
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+      Text(
+        text = subtitle,
+        fontSize = 13.sp,
+        color = TextSecondary,
+        textAlign = TextAlign.Center,
+        lineHeight = 19.sp
+      )
+      if (actionText != null && onAction != null) {
+        Spacer(modifier = Modifier.height(20.dp))
+        Button(
+          onClick = onAction,
+          colors = ButtonDefaults.buttonColors(containerColor = BrandPrimary),
+          shape = RoundedCornerShape(14.dp),
+          contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp),
+          modifier = Modifier.testTag("empty_state_action_btn")
+        ) {
+          Text(text = actionText, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+        }
       }
     }
   }
 }
 
+@Composable
+fun LiveStatusPill(modifier: Modifier = Modifier) {
+  val infiniteTransition = rememberInfiniteTransition(label = "live_pulse")
+  val dotAlpha by infiniteTransition.animateFloat(
+    initialValue = 0.35f,
+    targetValue = 1f,
+    animationSpec = infiniteRepeatable(
+      animation = tween(750, easing = LinearEasing),
+      repeatMode = RepeatMode.Reverse
+    ),
+    label = "live_dot_alpha"
+  )
+
+  Surface(
+    color = EmeraldOnline.copy(alpha = 0.14f),
+    shape = RoundedCornerShape(8.dp),
+    border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldOnline.copy(alpha = 0.35f)),
+    modifier = modifier.testTag("live_status_pill")
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+    ) {
+      Box(
+        modifier = Modifier
+          .size(6.dp)
+          .clip(CircleShape)
+          .background(EmeraldOnline.copy(alpha = dotAlpha))
+      )
+      Spacer(modifier = Modifier.width(4.5.dp))
+      Text(
+        text = "LIVE",
+        color = EmeraldOnline,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.ExtraBold,
+        letterSpacing = 0.8.sp
+      )
+    }
+  }
+}
+
 fun getInitials(name: String): String {
+
   if (name.isBlank()) return "?"
   val parts = name.trim().split(" ", "_")
   return if (parts.size >= 2) {

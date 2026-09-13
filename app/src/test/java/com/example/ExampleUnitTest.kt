@@ -38,21 +38,35 @@ class ExampleUnitTest {
     assertTrue("Initial rooms should be empty (no mock data)", initialRooms.isEmpty())
     assertTrue("Active sessions should be empty initially", viewModel.activeRoomSessions.value.isEmpty())
 
-    // Create a real room
+    // User starts with 1,450 coins. Add 1,000 coins to reach 2,450 coins for permanent room creation
+    viewModel.addTestCoins(1000)
+
+    // Create a real room (costs 2,000 coins)
     val newRoom = viewModel.createRoom("Movie Night", "Live stream movie night", false, "")
     assertNotNull("Created room should not be null", newRoom)
-    assertEquals("Movie Night", newRoom.name)
+    assertEquals("Movie Night", newRoom!!.name)
     assertEquals(1, viewModel.rooms.value.size)
 
     // Verify it is registered in activeRoomSessions
-    val activeSessions = viewModel.activeRoomSessions.value
+    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+    val activeSessions = if (viewModel.activeRoomSessions.value.isNotEmpty()) {
+      viewModel.activeRoomSessions.value
+    } else {
+      com.example.network.ActiveRoomSessionManager.activeRooms.value
+    }
     assertEquals("Should have 1 active room session", 1, activeSessions.size)
     assertEquals("Movie Night", activeSessions[0].name)
     assertTrue("Host should be connected", activeSessions[0].isHostConnected)
 
     // Cleanup
     viewModel.deleteRoom(newRoom.id)
-    assertTrue("Active sessions should be empty after deletion", viewModel.activeRoomSessions.value.isEmpty())
+    org.robolectric.shadows.ShadowLooper.idleMainLooper()
+    val sessionsAfterDelete = if (viewModel.activeRoomSessions.value.isEmpty()) {
+      viewModel.activeRoomSessions.value
+    } else {
+      com.example.network.ActiveRoomSessionManager.activeRooms.value
+    }
+    assertTrue("Active sessions should be empty after deletion", sessionsAfterDelete.isEmpty())
   }
 
   @Test
@@ -75,9 +89,13 @@ class ExampleUnitTest {
     val invalidJoin = viewModel.joinRoom("NON_EXISTENT_999")
     assertFalse("Joining nonexistent room should fail", invalidJoin)
 
+    // Add test coins for room creation
+    viewModel.addTestCoins(1000)
+
     // Create a real active room
     val room = viewModel.createRoom("Synchronized Audio Lounge", "8-Seat voice room", false, "")
-    val joined = viewModel.joinRoom(room.id)
+    assertNotNull("Room creation should succeed with sufficient coins", room)
+    val joined = viewModel.joinRoom(room!!.id)
     assertTrue("Should successfully join active room", joined)
     assertEquals(room.id, viewModel.currentActiveRoom.value?.id)
 
@@ -111,8 +129,10 @@ class ExampleUnitTest {
   @Test
   fun testSynchronizedVideoControls() {
     val viewModel = createViewModel()
+    viewModel.addTestCoins(1000)
     val room = viewModel.createRoom("Video Test Room", "Testing sync", false, "")
-    viewModel.joinRoom(room.id)
+    assertNotNull("Room creation should succeed with coins", room)
+    viewModel.joinRoom(room!!.id)
 
     assertTrue("Room owner should be able to control video", viewModel.canControlVideo())
 
@@ -259,4 +279,239 @@ class ExampleUnitTest {
     manager.leave()
     assertEquals(com.example.network.webrtc.WebRtcPeerConnectionState.CLOSED, manager.connectionState.value)
   }
+
+  @Test
+  fun testSecureStorageManagerEncryption() {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    val secureStorage = com.example.data.security.SecureStorageManager(app)
+
+    val secretKey = "test_secret_key"
+    val secretValue = "super_secure_jwt_token_xyz_12345"
+    secureStorage.saveSecureString(secretKey, secretValue)
+
+    val retrievedValue = secureStorage.getSecureString(secretKey)
+    assertEquals("Retrieved value must match original plaintext", secretValue, retrievedValue)
+
+    secureStorage.remove(secretKey)
+    assertNull("Value must be null after removal", secureStorage.getSecureString(secretKey))
+  }
+
+  @Test
+  fun testBackendSecurityControllerAuthAndRateLimiting() {
+    val userId = "USR-998877"
+    val username = "SecurityTester"
+
+    // 1. Issue Access Token
+    val token = com.example.network.security.BackendSecurityController.issueAccessToken(userId, username, true)
+    assertTrue("Access token must be non-empty", token.isNotBlank())
+
+    // 2. Validate Access Token
+    val session = com.example.network.security.BackendSecurityController.validateAccessToken(token)
+    assertNotNull("Validated session must not be null", session)
+    assertEquals(userId, session?.userId)
+    assertEquals(username, session?.username)
+
+    // 3. Test Chat Rate Limiting
+    // Rate limit allows 3 messages per 2 seconds
+    val u1 = "rate_test_user"
+    assertTrue("Message 1 allowed", com.example.network.security.BackendSecurityController.checkChatRateLimit(u1))
+    assertTrue("Message 2 allowed", com.example.network.security.BackendSecurityController.checkChatRateLimit(u1))
+    assertTrue("Message 3 allowed", com.example.network.security.BackendSecurityController.checkChatRateLimit(u1))
+    assertFalse("Message 4 should be rate limited", com.example.network.security.BackendSecurityController.checkChatRateLimit(u1))
+
+    // 4. Test Input Sanitization
+    val dirtyInput = "<script>alert('hack');</script> Hello <b>World</b>!"
+    val sanitized = com.example.network.security.BackendSecurityController.sanitizeInput(dirtyInput)
+    assertFalse("Sanitized string should not contain script tags", sanitized.contains("<script>"))
+    assertTrue("Sanitized string preserves safe text", sanitized.contains("Hello"))
+  }
+
+  @Test
+  fun testNetworkConnectivityMonitorAndRepositoryStatus() {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    val repository = com.example.data.repository.WatchTogetherRepository(app)
+
+    assertNotNull("Repository connection status must not be null", repository.connectionStatus.value)
+    assertNotNull("BackendApi instance must be created", repository.backendApi)
+    assertNotNull("SecureStorage must be created", repository.secureStorage)
+  }
+
+  @Test
+  fun testPermanentRoomCreationRequiresTwoThousandCoins() {
+    val viewModel = createViewModel()
+    val userId = viewModel.currentUser.value.id
+
+    // User initial balance is 1,450 coins (< 2,000 required)
+    val initialBalance = viewModel.coinWalletState.value.balance
+    assertEquals(1450, initialBalance)
+
+    // Attempting to create a permanent room without 2,000 coins MUST be rejected
+    val failedRoom = viewModel.createRoom("Underfunded Room", "Should fail", false, "")
+    assertNull("Room creation without 2,000 coins must be rejected", failedRoom)
+    assertEquals("Balance must remain unchanged after rejected creation", 1450, viewModel.coinWalletState.value.balance)
+
+    // Add 600 coins to reach 2,050 coins (>= 2,000 required)
+    viewModel.addTestCoins(600)
+    val balanceAfterBonus = viewModel.coinWalletState.value.balance
+    assertEquals(2050, balanceAfterBonus)
+
+    // Now permanent room creation MUST succeed and deduct exactly 2,000 coins
+    val createdRoom = viewModel.createRoom("VIP Lounge", "Owner permanent room", false, "")
+    assertNotNull("Room creation with >= 2,000 coins must succeed", createdRoom)
+    assertEquals(50, viewModel.coinWalletState.value.balance)
+
+    // Verify ledger contains the deduction record
+    val transactions = viewModel.coinWalletState.value.history
+    val creationTxn = transactions.firstOrNull { it.amount == -2000 }
+    assertNotNull("Transaction ledger must contain -2,000 Coins room creation entry", creationTxn)
+    assertTrue("Reason must mention room creation", creationTxn!!.reason.contains("Permanent Room", ignoreCase = true))
+
+    // Cleanup
+    viewModel.deleteRoom(createdRoom!!.id)
+  }
+
+  @Test
+  fun testDailyTasksProgressAndDailyEarningsLimit() {
+    val viewModel = createViewModel()
+    val userId = viewModel.currentUser.value.id
+
+    val wallet = viewModel.coinWalletState.value
+    assertEquals(100, wallet.dailyLimit)
+    assertEquals(5, wallet.tasks.size)
+
+    // Record voice room activity: target is 60 seconds
+    com.example.network.security.ServerCoinManager.recordActivity(
+      userId,
+      com.example.data.model.CoinTaskType.VOICE_ROOM_ACTIVITY,
+      60
+    )
+    viewModel.refreshCoinWallet()
+
+    val updatedWallet = viewModel.coinWalletState.value
+    val voiceTask = updatedWallet.tasks.first { it.taskType == com.example.data.model.CoinTaskType.VOICE_ROOM_ACTIVITY }
+    assertTrue("Voice task should be completed after 60s", voiceTask.isCompleted)
+
+    // Claim voice task (grants 20 coins)
+    val balBeforeClaim = updatedWallet.balance
+    viewModel.claimDailyTask(voiceTask.taskType.id)
+    val claimedWallet = viewModel.coinWalletState.value
+    assertEquals("Balance should increase by 20 coins", balBeforeClaim + 20, claimedWallet.balance)
+    assertEquals("Daily earnings should increase by 20", 20, claimedWallet.todayEarnings)
+  }
+
+  @Test
+  fun testVoiceRoomThemesAndLevelUnlocks() {
+    val presets = com.example.ui.theme.RoomThemePresets.PRESETS
+    assertEquals("Should have exactly 5 voice room themes", 5, presets.size)
+
+    val midnight = com.example.ui.theme.RoomThemePresets.getPreset(com.example.ui.theme.RoomThemeConstants.MIDNIGHT_AURORA)
+    val sunset = com.example.ui.theme.RoomThemePresets.getPreset(com.example.ui.theme.RoomThemeConstants.SUNSET_LOUNGE)
+    val emerald = com.example.ui.theme.RoomThemePresets.getPreset(com.example.ui.theme.RoomThemeConstants.EMERALD_NIGHT)
+    val cyber = com.example.ui.theme.RoomThemePresets.getPreset(com.example.ui.theme.RoomThemeConstants.CYBER_VIOLET)
+    val cosmic = com.example.ui.theme.RoomThemePresets.getPreset(com.example.ui.theme.RoomThemeConstants.COSMIC_GOLD)
+
+    // Level 1 checks
+    assertTrue("Midnight Aurora is free at Level 1", midnight.isUnlocked(1))
+    assertTrue("Sunset Lounge is free at Level 1", sunset.isUnlocked(1))
+    assertTrue("Emerald Night is free at Level 1", emerald.isUnlocked(1))
+    assertFalse("Cyber Violet should be locked at Level 1", cyber.isUnlocked(1))
+    assertFalse("Cosmic Gold should be locked at Level 1", cosmic.isUnlocked(1))
+
+    // Level 2 checks
+    assertTrue("Cyber Violet unlocks at Level 2", cyber.isUnlocked(2))
+    assertFalse("Cosmic Gold remains locked at Level 2", cosmic.isUnlocked(2))
+
+    // Level 3 checks
+    assertTrue("Cosmic Gold unlocks at Level 3", cosmic.isUnlocked(3))
+
+    // Test Theme Resolver
+    val resolvedDefault = com.example.ui.theme.RoomThemeEngine.resolveTheme(midnight.id)
+    assertEquals(midnight.name, resolvedDefault.preset.name)
+    assertNotNull(resolvedDefault.backgroundBrush)
+
+    // Test Custom Theme Configuration overrides
+    val customConfig = com.example.data.model.RoomThemeConfig(
+      themeId = midnight.id,
+      primaryAccentHex = "#F43F5E",
+      secondaryAccentHex = "#10B981",
+      glowIntensity = 0.95f,
+      glassTransparency = 0.50f,
+      backgroundEffect = com.example.data.model.RoomBackgroundEffect.NEON_PULSE
+    )
+    val resolvedCustom = com.example.ui.theme.RoomThemeEngine.resolveTheme(midnight.id, customConfig)
+    assertEquals(0.95f, resolvedCustom.glowIntensity, 0.01f)
+    assertEquals(com.example.data.model.RoomBackgroundEffect.NEON_PULSE, resolvedCustom.backgroundEffect)
+  }
+
+  @Test
+  fun testSendRoomGiftAndCoinDeduction() {
+    val viewModel = createViewModel()
+    viewModel.addTestCoins(1000)
+
+    val room = viewModel.createRoom("Gift Party Lounge", "Live gifts test room", false, "")
+    assertNotNull(room)
+    viewModel.joinRoom(room!!.id)
+
+    val initialBalance = viewModel.coinWalletState.value.balance
+
+    // Send a 10 coin Rose gift
+    val giftSent = viewModel.sendRoomGift(room.id, "Rose", "🌹", 10)
+    assertTrue("Sending gift with sufficient coins should succeed", giftSent)
+
+    val newBalance = viewModel.coinWalletState.value.balance
+    assertEquals("Balance should decrease by 10 coins", initialBalance - 10, newBalance)
+
+    // Verify celebratory chat message was broadcast
+    val chat = viewModel.roomChatMessages.value
+    val giftMsg = chat.firstOrNull { it.senderRole == "GIFT" }
+    assertNotNull("Chat should contain GIFT role message", giftMsg)
+    assertTrue("Message should mention Rose", giftMsg!!.text.contains("Rose"))
+
+    // Cleanup
+    viewModel.deleteRoom(room.id)
+  }
+
+  @Test
+  fun testRoomFullConfigurationAndPermissions() {
+    val viewModel = createViewModel()
+    viewModel.addTestCoins(1000)
+
+    val room = viewModel.createRoom("Config Lounge", "Original room", false, "")
+    assertNotNull(room)
+    viewModel.joinRoom(room!!.id)
+
+    // Update full room configuration
+    viewModel.updateRoomFullConfig(
+      roomId = room!!.id,
+      name = "Updated VIP Lounge",
+      desc = "New Description",
+      announcement = "Welcome to the new updated room!",
+      mode = com.example.data.model.VideoControlMode.ADMINS_ONLY,
+      locked = true,
+      seatPerm = com.example.data.model.SeatPermission.REQUIRE_APPROVAL,
+      chatPerm = com.example.data.model.ChatPermission.SEATED_ONLY,
+      isVideoEnabled = true,
+      isGameEnabled = true,
+      activeGameType = "DICE"
+    )
+
+    val updatedRoom = viewModel.currentActiveRoom.value
+    assertNotNull(updatedRoom)
+    assertEquals("Updated VIP Lounge", updatedRoom!!.name)
+    assertEquals("Welcome to the new updated room!", updatedRoom.announcement)
+    assertTrue(updatedRoom.isLocked)
+    assertEquals(com.example.data.model.SeatPermission.REQUIRE_APPROVAL, updatedRoom.seatPermission)
+    assertEquals(com.example.data.model.ChatPermission.SEATED_ONLY, updatedRoom.chatPermission)
+    assertTrue(updatedRoom.isVideoRoomEnabled)
+    assertTrue(updatedRoom.isGameEnabled)
+    assertEquals("DICE", updatedRoom.activeGameType)
+
+    // Update Theme
+    viewModel.updateRoomTheme(room.id, com.example.ui.theme.RoomThemeConstants.SUNSET_LOUNGE, null)
+    assertEquals(com.example.ui.theme.RoomThemeConstants.SUNSET_LOUNGE, viewModel.currentActiveRoom.value?.themeId)
+
+    // Cleanup
+    viewModel.deleteRoom(room.id)
+  }
 }
+

@@ -3,9 +3,10 @@ package com.example.data.model
 import android.net.Uri
 
 enum class StreamQuality(val label: String, val description: String, val bitrateKbps: Int) {
-  LOW("Low (480p)", "Data Saver • Lower bandwidth", 450),
-  MEDIUM("Medium (720p)", "Balanced quality & speed", 1200),
-  HIGH_ORIGINAL("High / Original", "Preserves full file bitrate", 4000)
+  AUTO("Auto", "Adaptive bandwidth matching", 2500),
+  LOW("480p", "Data Saver • Lower bandwidth", 450),
+  MEDIUM("720p", "Balanced quality & speed", 1200),
+  HIGH_ORIGINAL("1080p", "Full HD • Crystal clear", 4000)
 }
 
 enum class StreamMediaType(val label: String, val icon: String) {

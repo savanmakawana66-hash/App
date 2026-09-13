@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,8 +23,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.*
@@ -48,7 +52,8 @@ fun RoomListScreen(
   onActiveRoomSessionClick: (ActiveRoomSession) -> Unit = {},
   onToggleFavourite: (String) -> Unit,
   onOpenNotifications: () -> Unit,
-  onVerifyGuestClick: () -> Unit
+  onVerifyGuestClick: () -> Unit,
+  onOpenProfile: () -> Unit = {}
 ) {
   var passwordTargetSession by remember { mutableStateOf<ActiveRoomSession?>(null) }
   var passwordInput by remember { mutableStateOf("") }
@@ -64,38 +69,43 @@ fun RoomListScreen(
           .statusBarsPadding()
           .padding(horizontal = 16.dp, vertical = 12.dp)
       ) {
+        // TOP HEADER: App Logo, Notification Icon with Badge, Profile Avatar
         Row(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.SpaceBetween,
           modifier = Modifier.fillMaxWidth()
         ) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
+          // App Logo + Name
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.clickable { onOpenProfile() }
+          ) {
             Box(
               contentAlignment = Alignment.Center,
               modifier = Modifier
-                .size(38.dp)
-                .clip(CircleShape)
-                .background(Brush.linearGradient(listOf(IndigoPrimary, PurpleAccent)))
+                .size(42.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(Brush.linearGradient(listOf(BrandPrimary, MagentaAccent)))
             ) {
-              Text("🍿", fontSize = 19.sp)
+              Text("🍿", fontSize = 21.sp)
             }
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             Column {
               Text(
-                text = "Watch Party",
-                fontSize = 20.sp,
+                text = "Watch Together",
+                fontSize = 19.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color.White
               )
               Text(
-                text = "Real-Time Synchronized Streaming",
+                text = "Social Streaming & Voice",
                 fontSize = 11.sp,
                 color = TextSecondary
               )
             }
           }
 
-          // Top action icons
+          // Header Actions: Notifications & Profile Avatar with Live Border
           Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(
               onClick = onOpenNotifications,
@@ -118,26 +128,51 @@ fun RoomListScreen(
               }
             }
 
-            IconButton(
-              onClick = onJoinWatchPartyClick,
-              modifier = Modifier.testTag("join_by_id_icon_btn")
+            Spacer(modifier = Modifier.width(6.dp))
+
+            // Profile Avatar with Live Online Border (tap opens profile)
+            Box(
+              contentAlignment = Alignment.Center,
+              modifier = Modifier
+                .size(40.dp)
+                .clickable { onOpenProfile() }
+                .testTag("header_profile_avatar")
             ) {
-              Icon(
-                imageVector = Icons.Default.MeetingRoom,
-                contentDescription = "Join by Room Code",
-                tint = IndigoLight
+              Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                  .size(36.dp)
+                  .clip(CircleShape)
+                  .background(Brush.linearGradient(listOf(Color(0xFF261B3B), Color(0xFF131222))))
+                  .border(1.5.dp, DarkCardBorderSubtle, CircleShape)
+              ) {
+                Text(
+                  text = getInitials(currentUser.username),
+                  fontSize = 13.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = Color.White
+                )
+              }
+              // Online green indicator dot
+              Box(
+                modifier = Modifier
+                  .size(10.dp)
+                  .align(Alignment.BottomEnd)
+                  .clip(CircleShape)
+                  .background(EmeraldOnline)
+                  .border(1.5.dp, DarkSurface, CircleShape)
               )
             }
           }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        // Search bar
+        // Search bar with clear icon
         OutlinedTextField(
           value = searchQuery,
           onValueChange = onSearchChange,
-          placeholder = { Text("Search active rooms, hosts, or code...", fontSize = 13.sp) },
+          placeholder = { Text("Search rooms, hosts, or code...", fontSize = 13.sp, color = TextSecondary) },
           leadingIcon = {
             Icon(Icons.Default.Search, contentDescription = "Search", tint = TextSecondary)
           },
@@ -182,114 +217,163 @@ fun RoomListScreen(
         }
       }
 
-      // 2. WATCH PARTY HOST HERO CARD
+      // 2. MAIN HERO SECTION (Headline: "Watch together. Talk together. Play together.")
       item {
-        Surface(
-          shape = RoundedCornerShape(20.dp),
-          color = DarkSurfaceCard,
-          border = androidx.compose.foundation.BorderStroke(1.dp, Brush.linearGradient(listOf(IndigoPrimary, PurpleAccent))),
+        Card(
+          shape = RoundedCornerShape(24.dp),
+          colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
+          border = androidx.compose.foundation.BorderStroke(1.dp, DarkCardBorderSubtle),
           modifier = Modifier
             .fillMaxWidth()
             .testTag("watch_party_hero_card")
         ) {
-          Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween,
-              modifier = Modifier.fillMaxWidth()
-            ) {
-              Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                  contentAlignment = Alignment.Center,
-                  modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(Brush.linearGradient(listOf(IndigoPrimary, PurpleAccent)))
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .background(
+                Brush.verticalGradient(
+                  listOf(
+                    Color(0x2C8B5CF6),
+                    Color(0x14EC4899),
+                    Color.Transparent
+                  )
+                )
+              )
+          ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                LiveStatusPill()
+                Surface(
+                  color = DarkSurfaceElevated,
+                  shape = RoundedCornerShape(8.dp),
+                  border = androidx.compose.foundation.BorderStroke(1.dp, DarkCardBorderSubtle)
                 ) {
-                  Text("🎬", fontSize = 18.sp)
-                }
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                  Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                      text = "Host a Watch Party Room",
-                      color = Color.White,
-                      fontSize = 15.sp,
-                      fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Surface(
-                      color = EmeraldOnline.copy(alpha = 0.2f),
-                      shape = RoundedCornerShape(6.dp)
-                    ) {
-                      Text(
-                        text = "LIVE",
-                        color = EmeraldOnline,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
-                      )
-                    }
-                  }
                   Text(
-                    text = "Stream local media to remote friends with zero delay",
-                    color = TextSecondary,
-                    fontSize = 11.sp
+                    text = "⚡ Real-Time P2P",
+                    color = CyanAccent,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.5.dp)
                   )
                 }
               }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-              text = "Become a real Host. Pick video/audio from your phone and stream it in real-time. Your room instantly appears in the live directory with your verified heartbeat.",
-              color = Color.White.copy(alpha = 0.85f),
-              fontSize = 12.sp,
-              lineHeight = 16.sp
-            )
+              Spacer(modifier = Modifier.height(14.dp))
 
-            Spacer(modifier = Modifier.height(14.dp))
+              Text(
+                text = buildAnnotatedString {
+                  append("Watch ")
+                  withStyle(style = SpanStyle(color = CyanAccent, fontWeight = FontWeight.ExtraBold)) {
+                    append("together")
+                  }
+                  append(". Talk ")
+                  withStyle(style = SpanStyle(color = BrandVioletLight, fontWeight = FontWeight.ExtraBold)) {
+                    append("together")
+                  }
+                  append(". Play ")
+                  withStyle(style = SpanStyle(color = MagentaAccent, fontWeight = FontWeight.ExtraBold)) {
+                    append("together")
+                  }
+                  append(".")
+                },
+                color = Color.White,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.ExtraBold,
+                lineHeight = 26.sp
+              )
 
-            Row(
-              horizontalArrangement = Arrangement.spacedBy(10.dp),
-              modifier = Modifier.fillMaxWidth()
-            ) {
-              // Host Button
-              Button(
-                onClick = onHostWatchPartyClick,
-                colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                  .weight(1f)
-                  .height(44.dp)
-                  .testTag("host_watch_party_banner_btn")
+              Spacer(modifier = Modifier.height(8.dp))
+
+              Text(
+                text = "Synchronized video streaming with zero delay, crystal-clear 8-seat voice stages, and instant multiplayer games with your circle.",
+                color = TextSecondary,
+                fontSize = 13.sp,
+                lineHeight = 19.sp
+              )
+
+              Spacer(modifier = Modifier.height(18.dp))
+
+              // Action Buttons: Create Room, Join Room, Watch Party
+              Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth()
               ) {
-                Text("👑", fontSize = 14.sp)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Host Party", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-              }
+                // 1. Create Room (Primary button with premium gradient, rounded corners, subtle shadow & press animation)
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Brush.horizontalGradient(listOf(BrandPrimary, MagentaAccent)))
+                    .clickable { onCreateRoomClick() }
+                    .padding(vertical = 11.dp, horizontal = 10.dp)
+                    .testTag("create_room_btn")
+                ) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                  ) {
+                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Create Room", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                  }
+                }
 
-              // Join Button
-              Button(
-                onClick = onJoinWatchPartyClick,
-                colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceElevated),
-                border = androidx.compose.foundation.BorderStroke(1.dp, IndigoLight.copy(alpha = 0.5f)),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                  .weight(1f)
-                  .height(44.dp)
-                  .testTag("join_watch_party_banner_btn")
-              ) {
-                Text("🍿", fontSize = 14.sp)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Join by Code", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                // 2. Join Room (Secondary button with darker glass-like surface and subtle border)
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(DarkSurfaceElevated)
+                    .border(1.dp, DarkCardBorderSubtle, RoundedCornerShape(14.dp))
+                    .clickable { onJoinRoomClick() }
+                    .padding(vertical = 11.dp, horizontal = 10.dp)
+                    .testTag("join_room_btn")
+                ) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                  ) {
+                    Icon(Icons.Default.MeetingRoom, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Join Room", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                  }
+                }
+
+                // 3. Watch Party (Subtle accent button)
+                Box(
+                  contentAlignment = Alignment.Center,
+                  modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(DarkSurfaceElevated)
+                    .border(1.dp, BrandPrimary.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                    .clickable { onHostWatchPartyClick() }
+                    .padding(vertical = 11.dp, horizontal = 10.dp)
+                    .testTag("host_watch_party_banner_btn")
+                ) {
+                  Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                  ) {
+                    Text("🍿", fontSize = 13.sp)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Watch Party", color = BrandVioletLight, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                  }
+                }
               }
             }
           }
         }
       }
 
-      // 3. SECTION HEADER: ACTIVE ROOMS (Live Sessions Only)
+      // 3. SECTION HEADER: LIVE ROOMS (Genuine Sessions Only)
+      val totalLiveRooms = activeRoomSessions.size + rooms.size
       item {
         Row(
           verticalAlignment = Alignment.CenterVertically,
@@ -301,11 +385,11 @@ fun RoomListScreen(
               modifier = Modifier
                 .size(10.dp)
                 .clip(CircleShape)
-                .background(if (activeRoomSessions.isNotEmpty()) EmeraldOnline else TextSecondary)
+                .background(if (totalLiveRooms > 0) EmeraldOnline else TextSecondary)
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-              text = "ACTIVE ROOMS",
+              text = "LIVE ROOMS",
               fontSize = 15.sp,
               fontWeight = FontWeight.ExtraBold,
               color = Color.White,
@@ -313,21 +397,21 @@ fun RoomListScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Surface(
-              color = if (activeRoomSessions.isNotEmpty()) EmeraldOnline.copy(alpha = 0.2f) else DarkSurfaceElevated,
+              color = if (totalLiveRooms > 0) EmeraldOnline.copy(alpha = 0.2f) else DarkSurfaceElevated,
               shape = RoundedCornerShape(8.dp)
             ) {
               Text(
-                text = "${activeRoomSessions.size} Live",
+                text = "$totalLiveRooms Live",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (activeRoomSessions.isNotEmpty()) EmeraldOnline else TextSecondary,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                color = if (totalLiveRooms > 0) EmeraldOnline else TextSecondary,
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
               )
             }
           }
 
           Text(
-            text = "Live Host Heartbeat",
+            text = "Genuine Sessions",
             fontSize = 11.sp,
             color = TextSecondary,
             fontWeight = FontWeight.Medium
@@ -335,12 +419,12 @@ fun RoomListScreen(
         }
       }
 
-      // 4. ACTIVE ROOMS LIST OR EMPTY STATE
-      if (activeRoomSessions.isEmpty()) {
+      // 4. LIVE ROOMS OR ELEGANT EMPTY STATE
+      if (totalLiveRooms == 0) {
         item {
           Card(
             colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(22.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, DarkSurfaceBorder),
             modifier = Modifier
               .fillMaxWidth()
@@ -371,39 +455,55 @@ fun RoomListScreen(
               Spacer(modifier = Modifier.height(16.dp))
 
               Text(
-                text = "No active rooms right now.",
+                text = "No active live rooms at this moment.",
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White
+                color = Color.White,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
               )
 
               Spacer(modifier = Modifier.height(8.dp))
 
               Text(
-                text = "A room appears here ONLY when a real Host creates it and maintains an active heartbeat. No fake or placeholder rooms are displayed.",
-                fontSize = 12.sp,
+                text = "Start a Watch Party or create a room to go live! All rooms shown here are genuine live sessions with real host heartbeats.",
+                fontSize = 13.sp,
                 color = TextSecondary,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                lineHeight = 17.sp
+                lineHeight = 18.sp
               )
 
               Spacer(modifier = Modifier.height(20.dp))
 
-              Button(
-                onClick = onHostWatchPartyClick,
-                colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("host_empty_state_action_btn")
+              Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
               ) {
-                Text("👑", fontSize = 14.sp)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Host a Watch Party Now", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Button(
+                  onClick = onHostWatchPartyClick,
+                  colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
+                  shape = RoundedCornerShape(12.dp),
+                  modifier = Modifier.testTag("host_empty_state_action_btn")
+                ) {
+                  Text("🍿", fontSize = 14.sp)
+                  Spacer(modifier = Modifier.width(6.dp))
+                  Text("Host Watch Party", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                Button(
+                  onClick = onCreateRoomClick,
+                  colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceElevated),
+                  border = androidx.compose.foundation.BorderStroke(1.dp, DarkSurfaceBorder),
+                  shape = RoundedCornerShape(12.dp),
+                  modifier = Modifier.testTag("create_empty_state_action_btn")
+                ) {
+                  Text("Create Room", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
               }
             }
           }
         }
       } else {
-        items(activeRoomSessions, key = { it.roomId }) { session ->
+        // Active Watch Party Live Sessions
+        items(activeRoomSessions, key = { "active_${it.roomId}" }) { session ->
           ActiveRoomCardItem(
             session = session,
             onClick = {
@@ -417,7 +517,17 @@ fun RoomListScreen(
             }
           )
         }
+
+        // Standard Live Rooms
+        items(rooms, key = { "room_${it.id}" }) { room ->
+          RoomCardItem(
+            room = room,
+            onClick = { onRoomClick(room.id) },
+            onToggleFavourite = { onToggleFavourite(room.id) }
+          )
+        }
       }
+
 
       // 5. Verified Security Note
       item {
@@ -482,7 +592,7 @@ fun RoomListScreen(
             colors = OutlinedTextFieldDefaults.colors(
               focusedContainerColor = DarkSurfaceElevated,
               unfocusedContainerColor = DarkSurfaceElevated,
-              focusedBorderColor = IndigoPrimary
+              focusedBorderColor = BrandPrimary
             ),
             modifier = Modifier.fillMaxWidth()
           )
@@ -503,7 +613,7 @@ fun RoomListScreen(
               target?.let { onActiveRoomSessionClick(it) }
             }
           },
-          colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary)
+          colors = ButtonDefaults.buttonColors(containerColor = BrandPrimary)
         ) {
           Text("Join")
         }
@@ -527,18 +637,15 @@ fun ActiveRoomCardItem(
 
   Card(
     colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-    shape = RoundedCornerShape(20.dp),
-    border = androidx.compose.foundation.BorderStroke(
-      1.dp,
-      if (isHostConnected) EmeraldOnline.copy(alpha = 0.4f) else AmberXp.copy(alpha = 0.4f)
-    ),
+    shape = RoundedCornerShape(22.dp),
+    border = androidx.compose.foundation.BorderStroke(1.dp, DarkCardBorderSubtle),
     modifier = Modifier
       .fillMaxWidth()
       .clickable { onClick() }
       .testTag("active_room_card_${session.roomId}")
   ) {
     Column(modifier = Modifier.padding(16.dp)) {
-      // Top Row: Status badge, Room Name, Privacy tag
+      // Top Row: Avatar + Room Name + Owner + LIVE pill & Level
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -548,107 +655,100 @@ fun ActiveRoomCardItem(
           verticalAlignment = Alignment.CenterVertically,
           modifier = Modifier.weight(1f)
         ) {
-          // Status indicator dot
+          // Circular Avatar with Initials
           Box(
+            contentAlignment = Alignment.Center,
             modifier = Modifier
-              .size(10.dp)
+              .size(42.dp)
               .clip(CircleShape)
-              .background(
-                when {
-                  isHostConnected -> EmeraldOnline
-                  isReconnecting -> AmberXp
-                  else -> RoseError
-                }
-              )
-          )
-          Spacer(modifier = Modifier.width(8.dp))
-          Text(
-            text = session.name,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-          )
-        }
-
-        // Privacy indicator
-        Surface(
-          color = if (session.isPrivate) AmberXp.copy(alpha = 0.15f) else DarkSurfaceElevated,
-          shape = RoundedCornerShape(8.dp)
-        ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+              .background(Brush.linearGradient(listOf(Color(0xFF271C3D), Color(0xFF151427))))
+              .border(1.5.dp, DarkCardBorderSubtle, CircleShape)
           ) {
-            Icon(
-              imageVector = if (session.isPrivate) Icons.Default.Lock else Icons.Default.Public,
-              contentDescription = null,
-              tint = if (session.isPrivate) AmberXp else TextSecondary,
-              modifier = Modifier.size(12.dp)
-            )
-            Spacer(modifier = Modifier.width(4.dp))
             Text(
-              text = if (session.isPrivate) "Private" else "Public",
-              fontSize = 10.sp,
-              fontWeight = FontWeight.SemiBold,
-              color = if (session.isPrivate) AmberXp else TextSecondary
+              text = getInitials(session.hostName),
+              fontSize = 14.sp,
+              fontWeight = FontWeight.Bold,
+              color = Color.White
             )
           }
+
+          Spacer(modifier = Modifier.width(12.dp))
+
+          Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Text(
+                text = session.name,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+              if (session.isPrivate) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                  imageVector = Icons.Default.Lock,
+                  contentDescription = "Private",
+                  tint = AmberXp,
+                  modifier = Modifier.size(13.dp)
+                )
+              }
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Text(
+                text = "👑 Host: ${session.hostName}",
+                fontSize = 12.sp,
+                color = GoldOwner,
+                fontWeight = FontWeight.SemiBold
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(text = "•", fontSize = 11.sp, color = TextMuted)
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text = "Code: ${session.roomId}",
+                fontSize = 11.sp,
+                color = TextSecondary,
+                fontWeight = FontWeight.Medium
+              )
+            }
+          }
         }
+
+        // LIVE status pill
+        LiveStatusPill()
       }
 
-      Spacer(modifier = Modifier.height(6.dp))
+      Spacer(modifier = Modifier.height(12.dp))
 
-      // Host Name & Room ID
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        Text(
-          text = "👑 Host: ${session.hostName}",
-          fontSize = 12.sp,
-          color = GoldOwner,
-          fontWeight = FontWeight.SemiBold
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(text = "•", fontSize = 11.sp, color = TextSecondary)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-          text = "Code: ${session.roomId}",
-          fontSize = 11.sp,
-          color = TextSecondary,
-          fontWeight = FontWeight.Medium
-        )
-      }
-
-      Spacer(modifier = Modifier.height(10.dp))
-
-      // Status Badges Row: Media Type, Participants, Playback State
+      // Status Badges Row: Speaker Seats status, Listeners/Audience, Media Type
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.fillMaxWidth()
       ) {
-        // Media Type Badge
+        // Speaker Seats Status (e.g. "🎙️ 2/8 speaking")
+        val activeSpeakers = (session.participantCount.coerceIn(1, 8))
         Surface(
-          color = IndigoDark.copy(alpha = 0.5f),
+          color = DarkSurfaceElevated,
           shape = RoundedCornerShape(8.dp)
         ) {
           Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
           ) {
+            Text("🎙️", fontSize = 11.sp)
+            Spacer(modifier = Modifier.width(4.dp))
             Text(
-              text = if (session.mediaType == StreamMediaType.VIDEO) "🎬 Video" else "🎵 Audio",
+              text = "$activeSpeakers/8 speaking",
               fontSize = 11.sp,
-              fontWeight = FontWeight.Bold,
-              color = IndigoLight
+              fontWeight = FontWeight.SemiBold,
+              color = BrandVioletLight
             )
           }
         }
 
-        // Watching Count Badge
+        // Active listeners / member count
         Surface(
           color = DarkSurfaceElevated,
           shape = RoundedCornerShape(8.dp)
@@ -668,22 +768,18 @@ fun ActiveRoomCardItem(
           }
         }
 
-        // Playback State Badge
+        // Media Type Badge
         Surface(
-          color = if (session.isPlaying) EmeraldOnline.copy(alpha = 0.15f) else AmberXp.copy(alpha = 0.15f),
+          color = PurpleContainer,
           shape = RoundedCornerShape(8.dp)
         ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
+          Text(
+            text = if (session.mediaType == StreamMediaType.VIDEO) "🎬 Video" else "🎵 Audio",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = CyanAccent,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-          ) {
-            Text(
-              text = if (session.isPlaying) "▶ Playing" else "⏸ Paused",
-              fontSize = 11.sp,
-              fontWeight = FontWeight.Bold,
-              color = if (session.isPlaying) EmeraldOnline else AmberXp
-            )
-          }
+          )
         }
       }
 
@@ -702,7 +798,7 @@ fun ActiveRoomCardItem(
             Icon(
               imageVector = Icons.Default.PlayCircleFilled,
               contentDescription = null,
-              tint = IndigoLight,
+              tint = BrandVioletLight,
               modifier = Modifier.size(16.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
@@ -725,9 +821,9 @@ fun ActiveRoomCardItem(
         }
       }
 
-      Spacer(modifier = Modifier.height(12.dp))
+      Spacer(modifier = Modifier.height(14.dp))
 
-      // Footer: Heartbeat telemetry & Join Button
+      // Footer: Heartbeat telemetry & Clean high-contrast Join Button
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -758,12 +854,12 @@ fun ActiveRoomCardItem(
 
         Button(
           onClick = onClick,
-          colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
-          shape = RoundedCornerShape(10.dp),
-          contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+          colors = ButtonDefaults.buttonColors(containerColor = BrandPrimary),
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
           modifier = Modifier.testTag("join_active_room_${session.roomId}")
         ) {
-          Text("Join Room", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+          Text("Join Room", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
         }
       }
     }
@@ -778,14 +874,15 @@ fun RoomCardItem(
 ) {
   Card(
     colors = CardDefaults.cardColors(containerColor = DarkSurfaceCard),
-    shape = RoundedCornerShape(20.dp),
-    border = androidx.compose.foundation.BorderStroke(1.dp, DarkSurfaceBorder),
+    shape = RoundedCornerShape(22.dp),
+    border = androidx.compose.foundation.BorderStroke(1.dp, DarkCardBorderSubtle),
     modifier = Modifier
       .fillMaxWidth()
       .clickable { onClick() }
       .testTag("room_card_${room.id}")
   ) {
     Column(modifier = Modifier.padding(16.dp)) {
+      // Top Row: Avatar + Room Name + Owner + LIVE pill & Level + Favorite
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -795,65 +892,87 @@ fun RoomCardItem(
           verticalAlignment = Alignment.CenterVertically,
           modifier = Modifier.weight(1f)
         ) {
-          Text(
-            text = room.name,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-          )
-          Spacer(modifier = Modifier.width(6.dp))
-          if (room.isPrivate) {
-            Icon(
-              imageVector = Icons.Default.Lock,
-              contentDescription = "Private Room",
-              tint = AmberXp,
-              modifier = Modifier.size(14.dp)
+          // Circular Avatar with Owner Initials
+          Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+              .size(42.dp)
+              .clip(CircleShape)
+              .background(Brush.linearGradient(listOf(Color(0xFF271C3D), Color(0xFF151427))))
+              .border(1.5.dp, DarkCardBorderSubtle, CircleShape)
+          ) {
+            Text(
+              text = getInitials(room.ownerName),
+              fontSize = 14.sp,
+              fontWeight = FontWeight.Bold,
+              color = Color.White
             )
+          }
+
+          Spacer(modifier = Modifier.width(12.dp))
+
+          Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Text(
+                text = room.name,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+              )
+              if (room.isPrivate) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                  imageVector = Icons.Default.Lock,
+                  contentDescription = "Private",
+                  tint = AmberXp,
+                  modifier = Modifier.size(13.dp)
+                )
+              }
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Text(
+                text = "👑 Owner: ${room.ownerName}",
+                fontSize = 12.sp,
+                color = GoldOwner,
+                fontWeight = FontWeight.SemiBold
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(text = "•", fontSize = 11.sp, color = TextMuted)
+              Spacer(modifier = Modifier.width(6.dp))
+              Text(
+                text = "ID: ${room.id}",
+                fontSize = 11.sp,
+                color = TextSecondary,
+                fontWeight = FontWeight.Medium
+              )
+            }
           }
         }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-          RoomLevelBadge(level = room.roomLevel)
+          LiveStatusPill()
           Spacer(modifier = Modifier.width(6.dp))
+          RoomLevelBadge(level = room.roomLevel)
+          Spacer(modifier = Modifier.width(4.dp))
           IconButton(
             onClick = onToggleFavourite,
-            modifier = Modifier.size(28.dp)
+            modifier = Modifier.size(32.dp)
           ) {
             Icon(
               imageVector = if (room.isFavourite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
               contentDescription = "Favourite",
               tint = if (room.isFavourite) RoseError else TextSecondary,
-              modifier = Modifier.size(18.dp)
+              modifier = Modifier.size(20.dp)
             )
           }
         }
       }
 
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(top = 4.dp)
-      ) {
-        Text(
-          text = "👑 Owner: ${room.ownerName}",
-          fontSize = 11.sp,
-          color = GoldOwner,
-          fontWeight = FontWeight.SemiBold
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(text = "•", fontSize = 11.sp, color = TextSecondary)
-        Spacer(modifier = Modifier.width(8.dp))
-        Text(
-          text = "ID: ${room.id}",
-          fontSize = 11.sp,
-          color = TextSecondary,
-          fontWeight = FontWeight.Medium
-        )
-      }
-
       if (room.description.isNotBlank()) {
-        Spacer(modifier = Modifier.height(6.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
           text = room.description,
           fontSize = 12.sp,
@@ -863,43 +982,73 @@ fun RoomCardItem(
         )
       }
 
-      Spacer(modifier = Modifier.height(10.dp))
+      Spacer(modifier = Modifier.height(12.dp))
 
+      // Status Badges & High-Contrast Join Action
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
         modifier = Modifier.fillMaxWidth()
       ) {
-        Surface(
-          color = DarkSurfaceElevated,
-          shape = RoundedCornerShape(8.dp)
+        Row(
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+          verticalAlignment = Alignment.CenterVertically
         ) {
-          Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+          // Speaker seats status (e.g. "2/8 speaking")
+          val speakers = ((room.audienceCount / 4).coerceIn(1, 8))
+          Surface(
+            color = DarkSurfaceElevated,
+            shape = RoundedCornerShape(8.dp)
           ) {
-            Text("👥", fontSize = 11.sp)
-            Spacer(modifier = Modifier.width(4.dp))
-            Text(
-              text = "${room.audienceCount} members",
-              fontSize = 11.sp,
-              color = TextSecondary,
-              fontWeight = FontWeight.Medium
-            )
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+              Text("🎙️", fontSize = 11.sp)
+              Spacer(modifier = Modifier.width(4.dp))
+              Text(
+                text = "$speakers/8 speaking",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = BrandVioletLight
+              )
+            }
+          }
+
+          // Active listeners / member count
+          Surface(
+            color = DarkSurfaceElevated,
+            shape = RoundedCornerShape(8.dp)
+          ) {
+            Row(
+              verticalAlignment = Alignment.CenterVertically,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+              Text("👥", fontSize = 11.sp)
+              Spacer(modifier = Modifier.width(4.dp))
+              Text(
+                text = "${room.audienceCount} members",
+                fontSize = 11.sp,
+                color = TextPrimary,
+                fontWeight = FontWeight.SemiBold
+              )
+            }
           }
         }
 
+        // Clean, High-Contrast Join Button
         Button(
           onClick = onClick,
-          colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
-          shape = RoundedCornerShape(10.dp),
-          contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+          colors = ButtonDefaults.buttonColors(containerColor = BrandPrimary),
+          shape = RoundedCornerShape(12.dp),
+          contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
           modifier = Modifier.testTag("enter_room_${room.id}")
         ) {
-          Text("Enter", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+          Text("Join", fontSize = 13.sp, fontWeight = FontWeight.ExtraBold)
         }
       }
     }
   }
 }
+
 

@@ -4,25 +4,31 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.*
+import com.example.data.model.games.*
 import com.example.data.repository.WatchTogetherRepository
+import com.example.network.ActiveGameSessionManager
 import com.example.network.WatchPartyNetworkEngine
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 enum class BottomNavTab {
   ROOM,
   DM,
+  GAMES,
   PROFILE
 }
 
 class MainViewModel @JvmOverloads constructor(
   application: Application,
-  private val repository: WatchTogetherRepository = WatchTogetherRepository()
+  private val repository: WatchTogetherRepository = WatchTogetherRepository(application)
 ) : AndroidViewModel(application) {
 
   // Watch Party Engine (Host file streaming & Voice Room)
   val networkEngine = WatchPartyNetworkEngine(application) { currentUser.value }
   val activeWatchParty = networkEngine.activeParty
+
+  val connectionStatus = repository.connectionStatus
 
   init {
     viewModelScope.launch {
@@ -30,9 +36,19 @@ class MainViewModel @JvmOverloads constructor(
         repository.postEventMessage(msg)
       }
     }
+
+    // Periodic heartbeat to active game session
+    viewModelScope.launch {
+      while (true) {
+        delay(3000L)
+        _activeGameSessionId.value?.let { matchId ->
+          ActiveGameSessionManager.sendPlayerHeartbeat(matchId, currentUser.value.id)
+        }
+      }
+    }
   }
 
-  // Primary bottom navigation: EXACTLY 3 sections: 1. ROOM, 2. DM, 3. PROFILE
+  // Primary bottom navigation: EXACTLY 4 sections: 1. ROOM, 2. DM, 3. GAMES, 4. PROFILE
   private val _currentTab = MutableStateFlow(BottomNavTab.ROOM)
   val currentTab: StateFlow<BottomNavTab> = _currentTab.asStateFlow()
 
@@ -51,6 +67,22 @@ class MainViewModel @JvmOverloads constructor(
   val announcements = repository.announcements
   val appSettings = repository.appSettings
   val eventMessages = repository.eventMessages
+  val coinWalletState = repository.coinWalletState
+
+  private val _showDailyTasksDialog = MutableStateFlow(false)
+  val showDailyTasksDialog: StateFlow<Boolean> = _showDailyTasksDialog.asStateFlow()
+
+  private val _showCoinHistoryDialog = MutableStateFlow(false)
+  val showCoinHistoryDialog: StateFlow<Boolean> = _showCoinHistoryDialog.asStateFlow()
+
+  fun openDailyTasks() { _showDailyTasksDialog.value = true }
+  fun closeDailyTasks() { _showDailyTasksDialog.value = false }
+  fun openCoinHistory() { _showCoinHistoryDialog.value = true }
+  fun closeCoinHistory() { _showCoinHistoryDialog.value = false }
+
+  fun claimDailyTask(taskId: String) { repository.claimDailyTask(taskId) }
+  fun addTestCoins(amount: Int = 600) { repository.addTestCoins(amount) }
+  fun refreshCoinWallet() { repository.refreshCoinWallet() }
 
   // Room search & filtering
   private val _searchQuery = MutableStateFlow("")
@@ -90,7 +122,7 @@ class MainViewModel @JvmOverloads constructor(
 
       matchesCategory && matchesQuery
     }
-  }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+  }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
   // Strictly real-time Active Room Sessions from backend
   val activeRoomSessions: StateFlow<List<ActiveRoomSession>> = combine(
@@ -103,7 +135,7 @@ class MainViewModel @JvmOverloads constructor(
           it.roomId.contains(query, ignoreCase = true) ||
           it.hostName.contains(query, ignoreCase = true)
     }
-  }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+  }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
   // Active DM chat thread with a friend
   private val _activeChatFriend = MutableStateFlow<Friend?>(null)
@@ -154,6 +186,33 @@ class MainViewModel @JvmOverloads constructor(
   private val _showJoinWatchPartyDialog = MutableStateFlow(false)
   val showJoinWatchPartyDialog: StateFlow<Boolean> = _showJoinWatchPartyDialog.asStateFlow()
 
+  // -------------------------------------------------------------
+  // REAL-TIME GAMES STATE & MATCHMAKING
+  // -------------------------------------------------------------
+  private val _activeGameSessionId = MutableStateFlow<String?>(null)
+  val activeGameSessionId: StateFlow<String?> = _activeGameSessionId.asStateFlow()
+
+  val activeGameSession: StateFlow<GameSession?> = combine(
+    ActiveGameSessionManager.activeSessions,
+    _activeGameSessionId
+  ) { sessionsMap, id ->
+    if (id != null) sessionsMap[id] else null
+  }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+  val pendingGameInvites = ActiveGameSessionManager.pendingInvites
+
+  private val _isMatchmaking = MutableStateFlow(false)
+  val isMatchmaking: StateFlow<Boolean> = _isMatchmaking.asStateFlow()
+
+  private val _matchmakingGameType = MutableStateFlow(GameType.CHESS)
+  val matchmakingGameType: StateFlow<GameType> = _matchmakingGameType.asStateFlow()
+
+  private val _showInviteFriendForGame = MutableStateFlow<GameType?>(null)
+  val showInviteFriendForGame: StateFlow<GameType?> = _showInviteFriendForGame.asStateFlow()
+
+  private val _showJoinGameCodeDialog = MutableStateFlow(false)
+  val showJoinGameCodeDialog: StateFlow<Boolean> = _showJoinGameCodeDialog.asStateFlow()
+
   private val _reportTarget = MutableStateFlow<Pair<String, String>?>(null) // (type, id+name)
   val reportTarget: StateFlow<Pair<String, String>?> = _reportTarget.asStateFlow()
 
@@ -200,11 +259,13 @@ class MainViewModel @JvmOverloads constructor(
     welcome: String = "Welcome!",
     rules: String = "Be respectful",
     category: RoomCategory = RoomCategory.WATCH_TOGETHER
-  ): Room {
+  ): Room? {
     val room = repository.createRoom(name, description, isPrivate, password, welcome, rules, category)
-    _showCreateRoomDialog.value = false
-    // Join newly created room
-    joinRoom(room.id)
+    if (room != null) {
+      _showCreateRoomDialog.value = false
+      // Join newly created room
+      joinRoom(room.id)
+    }
     return room
   }
 
@@ -328,6 +389,47 @@ class MainViewModel @JvmOverloads constructor(
     _showRoomSettingsDialog.value = false
   }
 
+  fun updateRoomFullConfig(
+    roomId: String,
+    name: String,
+    desc: String,
+    announcement: String,
+    mode: VideoControlMode,
+    locked: Boolean,
+    seatPerm: SeatPermission,
+    chatPerm: ChatPermission,
+    isVideoEnabled: Boolean,
+    isGameEnabled: Boolean,
+    activeGameType: String?
+  ) {
+    repository.updateRoomFullConfig(roomId, name, desc, announcement, mode, locked, seatPerm, chatPerm, isVideoEnabled, isGameEnabled, activeGameType)
+    _showRoomSettingsDialog.value = false
+  }
+
+  fun updateRoomTheme(roomId: String, themeId: String, customConfig: RoomThemeConfig?) {
+    repository.updateRoomTheme(roomId, themeId, customConfig)
+  }
+
+  fun updateRoomMediaStream(roomId: String, streamUrl: String, title: String, durationSec: Int, quality: String = "HIGH") {
+    repository.updateRoomMediaStream(roomId, streamUrl, title, durationSec, quality)
+  }
+
+  fun updateVideoAudioSettings(roomId: String, videoVolume: Float, isMuted: Boolean, micVolume: Float) {
+    repository.updateVideoAudioSettings(roomId, videoVolume, isMuted, micVolume)
+  }
+
+  fun toggleFollowRoom(roomId: String) {
+    repository.toggleFollowRoom(roomId)
+  }
+
+  fun sendRoomGift(roomId: String, giftName: String, giftEmoji: String, coinCost: Int): Boolean {
+    return repository.sendRoomGift(roomId, giftName, giftEmoji, coinCost)
+  }
+
+  fun setRoomGame(roomId: String, gameType: String?, isEnabled: Boolean) {
+    repository.setRoomGame(roomId, gameType, isEnabled)
+  }
+
   // Profile & Settings
   fun openEditProfile() { _showEditProfileDialog.value = true }
   fun closeEditProfile() { _showEditProfileDialog.value = false }
@@ -369,5 +471,194 @@ class MainViewModel @JvmOverloads constructor(
       repository.reportItem(type, info, info, reason)
     }
     _reportTarget.value = null
+  }
+
+  // -------------------------------------------------------------
+  // GAMES ACTIONS & LOGIC
+  // -------------------------------------------------------------
+
+  fun openPlayWithFriend(gameType: GameType) {
+    _showInviteFriendForGame.value = gameType
+  }
+
+  fun closePlayWithFriend() {
+    _showInviteFriendForGame.value = null
+  }
+
+  fun openJoinGameCode() {
+    _showJoinGameCodeDialog.value = true
+  }
+
+  fun closeJoinGameCode() {
+    _showJoinGameCodeDialog.value = false
+  }
+
+  fun startMatchmaking(gameType: GameType) {
+    val user = currentUser.value
+    _matchmakingGameType.value = gameType
+    _isMatchmaking.value = true
+
+    val instantSession = ActiveGameSessionManager.enterMatchmaking(
+      userId = user.id,
+      username = user.username,
+      avatar = user.avatar,
+      gameType = gameType
+    )
+
+    if (instantSession != null) {
+      _isMatchmaking.value = false
+      _activeGameSessionId.value = instantSession.matchId
+      repository.postEventMessage("Opponent matched! Game started.")
+    }
+  }
+
+  fun cancelMatchmaking() {
+    ActiveGameSessionManager.cancelMatchmaking(currentUser.value.id)
+    _isMatchmaking.value = false
+  }
+
+  fun createPrivateGame(gameType: GameType) {
+    val user = currentUser.value
+    closePlayWithFriend()
+    val session = ActiveGameSessionManager.createPrivateGame(
+      hostId = user.id,
+      hostName = user.username,
+      hostAvatar = user.avatar,
+      gameType = gameType
+    )
+    _activeGameSessionId.value = session.matchId
+    repository.postEventMessage("Private ${gameType.displayName} room created: ${session.privateCode}")
+  }
+
+  fun joinGameByCode(code: String) {
+    val user = currentUser.value
+    closeJoinGameCode()
+    val session = ActiveGameSessionManager.joinGameByCode(
+      code = code,
+      userId = user.id,
+      username = user.username,
+      avatar = user.avatar
+    )
+    if (session != null) {
+      _activeGameSessionId.value = session.matchId
+      repository.postEventMessage("Joined ${session.gameType.displayName} game!")
+    } else {
+      repository.postEventMessage("Game code not found or already full.")
+    }
+  }
+
+  fun challengeFriendToGame(friend: Friend, gameType: GameType) {
+    val user = currentUser.value
+    closePlayWithFriend()
+    val (session, invite) = ActiveGameSessionManager.createFriendInvite(
+      senderId = user.id,
+      senderName = user.username,
+      senderAvatar = user.avatar,
+      recipientId = friend.userId,
+      gameType = gameType
+    )
+    _activeGameSessionId.value = session.matchId
+
+    // Also send an invitation DM into their chat thread!
+    repository.sendDirectMessage(
+      receiverId = friend.userId,
+      text = "🎮 ${user.username} challenged you to a game of ${gameType.displayName}! Tap to accept.",
+      isRoomInvite = false,
+      invitedRoomId = null,
+      invitedRoomName = null
+    )
+    repository.postEventMessage("Game challenge sent to ${friend.username}!")
+  }
+
+  fun acceptGameInvite(inviteId: String) {
+    val user = currentUser.value
+    val session = ActiveGameSessionManager.acceptFriendInvite(
+      inviteId = inviteId,
+      recipientId = user.id,
+      recipientName = user.username,
+      recipientAvatar = user.avatar
+    )
+    if (session != null) {
+      _activeGameSessionId.value = session.matchId
+      repository.postEventMessage("Joined ${session.gameType.displayName} match!")
+    } else {
+      repository.postEventMessage("Invite expired or game no longer available.")
+    }
+  }
+
+  fun declineGameInvite(inviteId: String) {
+    ActiveGameSessionManager.declineFriendInvite(inviteId)
+    repository.postEventMessage("Game invitation declined.")
+  }
+
+  fun makeChessMove(from: ChessPosition, to: ChessPosition) {
+    val matchId = _activeGameSessionId.value ?: return
+    val success = ActiveGameSessionManager.makeChessMove(matchId, from, to)
+    if (success) {
+      com.example.network.security.ServerCoinManager.recordActivity(
+        currentUser.value.id,
+        CoinTaskType.PLAY_GAME,
+        1
+      )
+      repository.refreshCoinWallet()
+    } else {
+      repository.postEventMessage("Illegal move.")
+    }
+  }
+
+  fun resignChess() {
+    val matchId = _activeGameSessionId.value ?: return
+    ActiveGameSessionManager.resignChess(matchId, currentUser.value.id)
+    repository.postEventMessage("You resigned the game.")
+  }
+
+  fun offerChessDraw() {
+    val matchId = _activeGameSessionId.value ?: return
+    ActiveGameSessionManager.offerChessDraw(matchId, currentUser.value.id)
+    repository.postEventMessage("Draw offer sent to opponent.")
+  }
+
+  fun respondChessDraw(accepted: Boolean) {
+    val matchId = _activeGameSessionId.value ?: return
+    ActiveGameSessionManager.respondChessDraw(matchId, accepted)
+    if (accepted) {
+      repository.postEventMessage("Draw accepted! Game drawn.")
+    } else {
+      repository.postEventMessage("Draw offer declined.")
+    }
+  }
+
+  fun rollLudoDice() {
+    val matchId = _activeGameSessionId.value ?: return
+    val roll = ActiveGameSessionManager.rollLudoDice(matchId, currentUser.value.id)
+    if (roll > 0) {
+      repository.postEventMessage("Rolled a $roll!")
+    }
+  }
+
+  fun moveLudoToken(tokenId: Int) {
+    val matchId = _activeGameSessionId.value ?: return
+    val success = ActiveGameSessionManager.moveLudoToken(matchId, currentUser.value.id, tokenId)
+    if (success) {
+      com.example.network.security.ServerCoinManager.recordActivity(
+        currentUser.value.id,
+        CoinTaskType.PLAY_GAME,
+        1
+      )
+      repository.refreshCoinWallet()
+    }
+  }
+
+  fun requestGameRematch() {
+    val matchId = _activeGameSessionId.value ?: return
+    ActiveGameSessionManager.requestRematch(matchId, currentUser.value.id)
+    repository.postEventMessage("Rematch requested!")
+  }
+
+  fun leaveActiveGame() {
+    val matchId = _activeGameSessionId.value ?: return
+    ActiveGameSessionManager.leaveGame(matchId, currentUser.value.id)
+    _activeGameSessionId.value = null
+    repository.postEventMessage("Left game.")
   }
 }
