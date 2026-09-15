@@ -79,7 +79,7 @@ class LocalMediaServer(private val context: Context) {
       }
 
       Log.i(TAG, "LocalMediaServer started on port $serverPort")
-      return getStreamUrl()
+      return getLanStreamUrl()
     } catch (e: Exception) {
       Log.e(TAG, "Failed to start LocalMediaServer: ${e.message}", e)
       return ""

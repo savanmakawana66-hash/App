@@ -4,7 +4,13 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.util.Log
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
@@ -32,10 +38,21 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import com.example.data.model.*
 import com.example.network.WatchPartyNetworkEngine
 import com.example.network.webrtc.*
 import com.example.ui.theme.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import org.json.JSONObject
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,6 +80,18 @@ fun WatchPartyStageScreen(
   var isFullscreen by remember { mutableStateOf(false) }
   var showFloatingChat by remember { mutableStateOf(true) }
   var showChangeSourceDialog by remember { mutableStateOf(false) }
+
+  // SAF File Picker Launcher to select real video files from device
+  val changeSourcePickerLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.OpenDocument()
+  ) { uri: Uri? ->
+    if (uri != null) {
+      val resolved = engine.resolveLocalMediaFromUri(uri)
+      engine.changeMediaSource(resolved)
+      showChangeSourceDialog = false
+    }
+  }
+
   var floatingReactions by remember { mutableStateOf(listOf<String>()) }
   val liveChatMessages = remember {
     mutableStateListOf(
@@ -96,10 +125,11 @@ fun WatchPartyStageScreen(
   Scaffold(
     containerColor = DarkBackground,
     topBar = {
-      // -------------------------------------------------------------
-      // TOP BAR: ROOM CODE, COPY/SHARE, SYNC PILL & LEAVE
-      // -------------------------------------------------------------
-      TopAppBar(
+      if (!isFullscreen) {
+        // -------------------------------------------------------------
+        // TOP BAR: ROOM CODE, COPY/SHARE, SYNC PILL & LEAVE
+        // -------------------------------------------------------------
+        TopAppBar(
         colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkSurface),
         title = {
           Row(verticalAlignment = Alignment.CenterVertically) {
@@ -205,17 +235,19 @@ fun WatchPartyStageScreen(
         }
       )
     }
+  }
   ) { paddingValues ->
     Column(
       modifier = Modifier
         .fillMaxSize()
-        .padding(paddingValues)
+        .padding(if (isFullscreen) PaddingValues(0.dp) else paddingValues)
     ) {
-      // -------------------------------------------------------------
-      // STATUS STRIP: CONNECTION STATE, QUALITY & METRICS
-      // -------------------------------------------------------------
-      Surface(
-        color = DarkSurfaceElevated,
+      if (!isFullscreen) {
+        // -------------------------------------------------------------
+        // STATUS STRIP: CONNECTION STATE, QUALITY & METRICS
+        // -------------------------------------------------------------
+        Surface(
+          color = DarkSurfaceElevated,
         modifier = Modifier.fillMaxWidth()
       ) {
         Row(
@@ -353,6 +385,7 @@ fun WatchPartyStageScreen(
           }
         }
       }
+      }
 
       // -------------------------------------------------------------
       // MEDIA STAGE: 16:9 VIDEO PLAYER OR MUSIC VISUALIZER
@@ -377,7 +410,10 @@ fun WatchPartyStageScreen(
           // VIDEO PLAYER STAGE
           VideoPlayerStage(
             party = party,
-            isPlaying = party.isPlaying
+            isPlaying = party.isPlaying,
+            isFullscreen = isFullscreen,
+            engine = engine,
+            onFullscreenToggle = { isFullscreen = !isFullscreen }
           )
         }
 
@@ -497,6 +533,20 @@ fun WatchPartyStageScreen(
                 }
               }
             }
+
+            Spacer(modifier = Modifier.width(6.dp))
+            IconButton(
+              onClick = { isFullscreen = !isFullscreen },
+              modifier = Modifier
+                .size(32.dp)
+                .testTag("stage_fullscreen_toggle_btn")
+            ) {
+              Icon(
+                imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                contentDescription = "Toggle Fullscreen",
+                tint = Color.White
+              )
+            }
           }
         }
 
@@ -506,7 +556,7 @@ fun WatchPartyStageScreen(
             verticalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier
               .align(Alignment.BottomStart)
-              .padding(start = 12.dp, bottom = 12.dp)
+              .padding(start = 12.dp, bottom = if (isFullscreen) 90.dp else 12.dp)
               .fillMaxWidth(0.65f)
           ) {
             liveChatMessages.takeLast(3).forEach { msg ->
@@ -540,7 +590,7 @@ fun WatchPartyStageScreen(
           modifier = Modifier
             .fillMaxWidth()
             .align(Alignment.BottomCenter)
-            .padding(bottom = 20.dp)
+            .padding(bottom = if (isFullscreen) 95.dp else 20.dp)
         ) {
           floatingReactions.takeLast(4).forEach { emoji ->
             Text(
@@ -550,11 +600,93 @@ fun WatchPartyStageScreen(
             )
           }
         }
+
+        // Fullscreen Floating Bottom Controls Overlay
+        if (isFullscreen) {
+          Surface(
+            color = Color.Black.copy(alpha = 0.82f),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, DarkSurfaceBorder),
+            modifier = Modifier
+              .align(Alignment.BottomCenter)
+              .fillMaxWidth()
+              .padding(16.dp)
+          ) {
+            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                Text(
+                  text = formatTime(party.positionSec.toInt()),
+                  color = TextSecondary,
+                  fontSize = 11.sp,
+                  modifier = Modifier.width(44.dp)
+                )
+
+                Slider(
+                  value = party.positionSec,
+                  onValueChange = { newPos -> engine.seekVideo(newPos) },
+                  valueRange = 0f..party.durationSec.toFloat().coerceAtLeast(1f),
+                  colors = SliderDefaults.colors(
+                    thumbColor = IndigoLight,
+                    activeTrackColor = IndigoPrimary,
+                    inactiveTrackColor = DarkSurfaceElevated
+                  ),
+                  modifier = Modifier.weight(1f)
+                )
+
+                Text(
+                  text = formatTime(party.durationSec),
+                  color = TextSecondary,
+                  fontSize = 11.sp,
+                  textAlign = TextAlign.End,
+                  modifier = Modifier.width(44.dp)
+                )
+              }
+
+              Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                IconButton(onClick = { showFloatingChat = !showFloatingChat }) {
+                  Icon(
+                    imageVector = if (showFloatingChat) Icons.Default.ChatBubble else Icons.Outlined.ChatBubbleOutline,
+                    contentDescription = "Toggle Chat",
+                    tint = if (showFloatingChat) IndigoLight else TextSecondary
+                  )
+                }
+                IconButton(onClick = { engine.rewind10() }) {
+                  Icon(Icons.Default.Replay10, contentDescription = "Rewind 10s", tint = Color.White)
+                }
+                FilledIconButton(
+                  onClick = { engine.togglePlayPause() },
+                  colors = IconButtonDefaults.filledIconButtonColors(containerColor = IndigoPrimary),
+                  modifier = Modifier.size(48.dp)
+                ) {
+                  Icon(
+                    imageVector = if (party.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (party.isPlaying) "Pause" else "Play",
+                    tint = Color.White
+                  )
+                }
+                IconButton(onClick = { engine.forward10() }) {
+                  Icon(Icons.Default.Forward10, contentDescription = "Forward 10s", tint = Color.White)
+                }
+                IconButton(onClick = { isFullscreen = false }) {
+                  Icon(Icons.Default.FullscreenExit, contentDescription = "Exit Fullscreen", tint = Color.White)
+                }
+              }
+            }
+          }
+        }
       }
 
-      // -------------------------------------------------------------
-      // SYNCHRONIZED PLAYBACK CONTROLS (Play/Pause, Scrub, Skip, Fullscreen)
-      // -------------------------------------------------------------
+      if (!isFullscreen) {
+        // -------------------------------------------------------------
+        // SYNCHRONIZED PLAYBACK CONTROLS (Play/Pause, Scrub, Skip, Fullscreen)
+        // -------------------------------------------------------------
       Surface(
         color = DarkSurface,
         border = BorderStroke(1.dp, DarkSurfaceBorder),
@@ -792,6 +924,7 @@ fun WatchPartyStageScreen(
           }
         }
       }
+      }
     }
   }
 
@@ -799,44 +932,8 @@ fun WatchPartyStageScreen(
   // HOST CHANGE SOURCE DIALOG
   // -------------------------------------------------------------
   if (showChangeSourceDialog) {
-    val sampleSources = listOf(
-      LocalMediaItem(
-        title = "4K Cyberpunk City Tour",
-        mimeType = "video/mp4",
-        durationSec = 2400,
-        mediaType = StreamMediaType.VIDEO,
-        resolution = "1080p (60fps)",
-        codec = "H.264 / AAC",
-        fileSizeBytes = 420000000L
-      ),
-      LocalMediaItem(
-        title = "Deep Space Cosmos Documentary",
-        mimeType = "video/mp4",
-        durationSec = 3600,
-        mediaType = StreamMediaType.VIDEO,
-        resolution = "1080p Full HD",
-        codec = "H.265 / HEVC",
-        fileSizeBytes = 580000000L
-      ),
-      LocalMediaItem(
-        title = "Midnight Lo-Fi Chill Beats",
-        mimeType = "audio/mp3",
-        durationSec = 1800,
-        mediaType = StreamMediaType.AUDIO,
-        resolution = "320 kbps High Fidelity",
-        codec = "MP3 / Stereo",
-        fileSizeBytes = 68000000L
-      ),
-      LocalMediaItem(
-        title = "Indie Rock Live Festival 2026",
-        mimeType = "audio/mp3",
-        durationSec = 2100,
-        mediaType = StreamMediaType.AUDIO,
-        resolution = "FLAC 24-bit",
-        codec = "FLAC Lossless",
-        fileSizeBytes = 120000000L
-      )
-    )
+    val recentSafItems = remember { engine.getRecentSafMedia() }
+    val sampleSources = remember { engine.getSampleMediaPresets() }
 
     AlertDialog(
       onDismissRequest = { showChangeSourceDialog = false },
@@ -849,7 +946,80 @@ fun WatchPartyStageScreen(
         }
       },
       text = {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+          modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+        ) {
+          // 1. SAF Device Video Picker Button
+          Button(
+            onClick = {
+              try {
+                changeSourcePickerLauncher.launch(arrayOf("video/*", "audio/*"))
+              } catch (e: Exception) {
+                changeSourcePickerLauncher.launch(arrayOf("*/*"))
+              }
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+              .fillMaxWidth()
+              .testTag("pick_device_video_saf_btn")
+          ) {
+            Icon(Icons.Default.FolderOpen, contentDescription = null, tint = Color.White)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Pick Video from Phone Storage", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+          }
+
+          // 2. Recent Picked Files
+          if (recentSafItems.isNotEmpty()) {
+            Text(
+              text = "Recent Videos Picked",
+              color = IndigoLight,
+              fontSize = 11.sp,
+              fontWeight = FontWeight.Bold
+            )
+            recentSafItems.forEach { recentItem ->
+              Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = if (party.activeMedia.uriString == recentItem.uriString) IndigoPrimary.copy(alpha = 0.25f) else DarkSurfaceElevated,
+                border = BorderStroke(
+                  1.dp,
+                  if (party.activeMedia.uriString == recentItem.uriString) IndigoPrimary else DarkSurfaceBorder
+                ),
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .clickable {
+                    engine.changeMediaSource(recentItem)
+                    showChangeSourceDialog = false
+                  }
+              ) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  modifier = Modifier.padding(10.dp)
+                ) {
+                  Text("📁", fontSize = 18.sp)
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(recentItem.title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("${recentItem.resolution} • ${recentItem.formattedSize}", color = TextSecondary, fontSize = 10.sp)
+                  }
+                  if (party.activeMedia.uriString == recentItem.uriString) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldOnline, modifier = Modifier.size(16.dp))
+                  }
+                }
+              }
+            }
+          }
+
+          // 3. Online Preset Video Streams
+          Text(
+            text = "Demo Streaming Presets",
+            color = TextSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+          )
           sampleSources.forEach { source ->
             Surface(
               shape = RoundedCornerShape(12.dp),
@@ -867,16 +1037,16 @@ fun WatchPartyStageScreen(
             ) {
               Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(12.dp)
+                modifier = Modifier.padding(10.dp)
               ) {
-                Text(if (source.mediaType == StreamMediaType.VIDEO) "🎬" else "🎵", fontSize = 20.sp)
-                Spacer(modifier = Modifier.width(10.dp))
+                Text(if (source.mediaType == StreamMediaType.VIDEO) "🎬" else "🎵", fontSize = 18.sp)
+                Spacer(modifier = Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                  Text(source.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                  Text("${source.resolution} • ${source.formattedSize}", color = TextSecondary, fontSize = 11.sp)
+                  Text(source.title, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                  Text("${source.resolution} • ${source.formattedSize}", color = TextSecondary, fontSize = 10.sp)
                 }
                 if (party.activeMedia.title == source.title) {
-                  Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldOnline, modifier = Modifier.size(18.dp))
+                  Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldOnline, modifier = Modifier.size(16.dp))
                 }
               }
             }
@@ -1091,11 +1261,148 @@ fun ParticipantAvatarPill(participant: WatchPartyParticipant) {
 }
 
 // -------------------------------------------------------------
-// VIDEO PLAYER STAGE
+// REAL VIDEO PLAYER STAGE (AndroidX Media3 ExoPlayer)
 // -------------------------------------------------------------
 @Composable
-fun VideoPlayerStage(party: WatchPartyRoom, isPlaying: Boolean) {
+fun VideoPlayerStage(
+  party: WatchPartyRoom,
+  isPlaying: Boolean,
+  isFullscreen: Boolean = false,
+  engine: WatchPartyNetworkEngine,
+  onFullscreenToggle: () -> Unit = {}
+) {
+  val context = LocalContext.current
   val media = party.activeMedia
+  val streamUri = remember(party.streamUrl, media.uriString) {
+    party.streamUrl?.let { Uri.parse(it) } ?: media.getEffectiveUri()
+  }
+
+  var isBuffering by remember { mutableStateOf(false) }
+  var playbackError by remember { mutableStateOf<String?>(null) }
+  var retryTrigger by remember { mutableStateOf(0) }
+
+  // Build ExoPlayer instance
+  val exoPlayer = remember(context) {
+    ExoPlayer.Builder(context)
+      .setSeekBackIncrementMs(10_000)
+      .setSeekForwardIncrementMs(10_000)
+      .build().apply {
+        playWhenReady = party.isPlaying
+        repeatMode = Player.REPEAT_MODE_OFF
+      }
+  }
+
+  // Manage ExoPlayer Lifecycle & Release
+  DisposableEffect(exoPlayer) {
+    onDispose {
+      try {
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
+        exoPlayer.release()
+      } catch (e: Exception) {
+        Log.e("VideoPlayerStage", "Error releasing ExoPlayer", e)
+      }
+    }
+  }
+
+  // Listen to ExoPlayer events (Buffering, Errors, Duration & State)
+  DisposableEffect(exoPlayer) {
+    val listener = object : Player.Listener {
+      override fun onPlaybackStateChanged(playbackState: Int) {
+        isBuffering = (playbackState == Player.STATE_BUFFERING)
+        if (playbackState == Player.STATE_READY) {
+          playbackError = null
+          val durMs = exoPlayer.duration
+          if (durMs > 0) {
+            val durSec = (durMs / 1000L).toInt()
+            val currentPosSec = (exoPlayer.currentPosition / 1000f)
+            engine.updatePlaybackPosition(currentPosSec, durSec)
+          }
+        }
+      }
+
+      override fun onPlayerError(error: PlaybackException) {
+        Log.e("VideoPlayerStage", "Player error: ${error.errorCodeName} - ${error.message}", error)
+        playbackError = "Playback error (${error.errorCodeName}): ${error.message ?: "Unable to play video"}"
+        isBuffering = false
+      }
+    }
+    exoPlayer.addListener(listener)
+    onDispose {
+      exoPlayer.removeListener(listener)
+    }
+  }
+
+  // Load / Update Media Item when streamUri or retryTrigger changes
+  LaunchedEffect(streamUri, retryTrigger) {
+    if (streamUri != null) {
+      try {
+        playbackError = null
+        isBuffering = true
+        val mediaItem = MediaItem.fromUri(streamUri)
+        exoPlayer.setMediaItem(mediaItem)
+        exoPlayer.prepare()
+        if (party.positionSec > 0f) {
+          exoPlayer.seekTo((party.positionSec * 1000L).toLong())
+        }
+        exoPlayer.playWhenReady = party.isPlaying
+      } catch (e: Exception) {
+        Log.e("VideoPlayerStage", "Failed to load media item: $streamUri", e)
+        playbackError = "Failed to load video: ${e.localizedMessage}"
+        isBuffering = false
+      }
+    } else {
+      exoPlayer.clearMediaItems()
+      isBuffering = false
+    }
+  }
+
+  // Synchronize Play/Pause with party.isPlaying
+  LaunchedEffect(isPlaying) {
+    if (exoPlayer.isPlaying != isPlaying) {
+      if (isPlaying) {
+        exoPlayer.play()
+      } else {
+        exoPlayer.pause()
+      }
+    }
+  }
+
+  // Synchronize Remote Seek position if drift exceeds tolerance
+  LaunchedEffect(party.positionSec) {
+    val playerPosSec = exoPlayer.currentPosition / 1000f
+    val drift = kotlin.math.abs(playerPosSec - party.positionSec)
+    if (!party.isHost && drift > 1.2f) {
+      exoPlayer.seekTo((party.positionSec * 1000L).toLong())
+    }
+  }
+
+  // Continuous Playback Time reporter (Host periodically reports position to engine)
+  LaunchedEffect(isPlaying, party.isHost) {
+    while (isPlaying && party.isHost) {
+      delay(400)
+      if (exoPlayer.playbackState == Player.STATE_READY) {
+        val currentSec = exoPlayer.currentPosition / 1000f
+        val durMs = exoPlayer.duration
+        val durSec = if (durMs > 0) (durMs / 1000L).toInt() else party.durationSec
+        engine.updatePlaybackPosition(currentSec, durSec)
+      }
+    }
+  }
+
+  // Stream Quality selector adaptation on ExoPlayer
+  LaunchedEffect(party.currentQuality) {
+    val maxBitrate = when (party.currentQuality) {
+      StreamQuality.AUTO -> Int.MAX_VALUE
+      StreamQuality.HIGH_ORIGINAL -> 8_000_000
+      StreamQuality.MEDIUM -> 3_000_000
+      StreamQuality.LOW -> 800_000
+    }
+    exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+      .buildUpon()
+      .setMaxVideoBitrate(maxBitrate)
+      .build()
+  }
 
   Box(
     contentAlignment = Alignment.Center,
@@ -1103,89 +1410,126 @@ fun VideoPlayerStage(party: WatchPartyRoom, isPlaying: Boolean) {
       .fillMaxSize()
       .testTag("video_player_stage")
   ) {
-    // Cinematic background gradient
-    Box(
-      modifier = Modifier
-        .fillMaxSize()
-        .background(
-          Brush.radialGradient(
-            listOf(IndigoDark.copy(alpha = 0.4f), Color.Black)
-          )
+    if (streamUri != null && playbackError == null) {
+      // Real AndroidX Media3 Video Player View
+      AndroidView(
+        factory = { ctx ->
+          PlayerView(ctx).apply {
+            player = exoPlayer
+            useController = false // Synchronized controls handled by app UI
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+            layoutParams = FrameLayout.LayoutParams(
+              ViewGroup.LayoutParams.MATCH_PARENT,
+              ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(android.graphics.Color.BLACK)
+          }
+        },
+        update = { playerView ->
+          if (playerView.player != exoPlayer) {
+            playerView.player = exoPlayer
+          }
+        },
+        modifier = Modifier
+          .fillMaxSize()
+          .clickable { onFullscreenToggle() }
+      )
+    } else if (playbackError != null) {
+      // Friendly Error Display with Retry Button
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(24.dp)
+      ) {
+        Box(
+          contentAlignment = Alignment.Center,
+          modifier = Modifier
+            .size(64.dp)
+            .clip(CircleShape)
+            .background(Color(0xFFD32F2F).copy(alpha = 0.2f))
+            .border(2.dp, Color(0xFFD32F2F), CircleShape)
+        ) {
+          Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = Color(0xFFFF5252), modifier = Modifier.size(36.dp))
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+        Text(
+          text = "Playback Interrupted",
+          color = Color.White,
+          fontSize = 15.sp,
+          fontWeight = FontWeight.Bold
         )
-    )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+          text = playbackError ?: "Unable to stream source",
+          color = TextSecondary,
+          fontSize = 11.sp,
+          textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(
+          onClick = { retryTrigger++ },
+          colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
+          shape = RoundedCornerShape(10.dp)
+        ) {
+          Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+          Spacer(modifier = Modifier.width(6.dp))
+          Text("Retry Video", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+      }
+    } else {
+      // Empty / Waiting for Video Selection
+      Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+        modifier = Modifier
+          .fillMaxSize()
+          .padding(24.dp)
+      ) {
+        Box(
+          contentAlignment = Alignment.Center,
+          modifier = Modifier
+            .size(72.dp)
+            .clip(CircleShape)
+            .background(IndigoPrimary.copy(alpha = 0.25f))
+            .border(2.dp, IndigoLight, CircleShape)
+        ) {
+          Icon(Icons.Default.Movie, contentDescription = null, tint = Color.White, modifier = Modifier.size(36.dp))
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+          text = if (party.isHost) "Select a video from your device" else "Waiting for host to start video...",
+          color = Color.White,
+          fontSize = 14.sp,
+          fontWeight = FontWeight.Bold,
+          textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+          text = "Supports MP4, MKV, WebM, 4K/1080p, AAC/Opus",
+          color = TextSecondary,
+          fontSize = 11.sp
+        )
+      }
+    }
 
-    // Center Video Stage representation
-    Column(
-      horizontalAlignment = Alignment.CenterHorizontally,
-      modifier = Modifier.padding(24.dp)
-    ) {
+    // Buffering Spinner Overlay
+    if (isBuffering) {
       Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-          .size(88.dp)
-          .clip(CircleShape)
-          .background(IndigoPrimary.copy(alpha = 0.25f))
-          .border(2.dp, IndigoLight, CircleShape)
+          .fillMaxSize()
+          .background(Color.Black.copy(alpha = 0.45f))
       ) {
-        Icon(
-          imageVector = if (isPlaying) Icons.Default.Movie else Icons.Default.Pause,
-          contentDescription = null,
-          tint = Color.White,
-          modifier = Modifier.size(44.dp)
-        )
-      }
-
-      Spacer(modifier = Modifier.height(16.dp))
-
-      Text(
-        text = media.title,
-        color = Color.White,
-        fontSize = 17.sp,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center
-      )
-
-      Spacer(modifier = Modifier.height(6.dp))
-
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Surface(
-          color = DarkSurfaceCard,
-          shape = RoundedCornerShape(6.dp),
-          border = BorderStroke(1.dp, DarkSurfaceBorder)
-        ) {
-          Text(
-            text = media.resolution,
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+          CircularProgressIndicator(
             color = IndigoLight,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+            modifier = Modifier.size(44.dp),
+            strokeWidth = 3.dp
           )
-        }
-
-        Surface(
-          color = DarkSurfaceCard,
-          shape = RoundedCornerShape(6.dp),
-          border = BorderStroke(1.dp, DarkSurfaceBorder)
-        ) {
-          Text(
-            text = media.codec,
-            color = TextSecondary,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-          )
-        }
-
-        Surface(
-          color = DarkSurfaceCard,
-          shape = RoundedCornerShape(6.dp),
-          border = BorderStroke(1.dp, DarkSurfaceBorder)
-        ) {
-          Text(
-            text = media.formattedSize,
-            color = TextSecondary,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-          )
+          Spacer(modifier = Modifier.height(10.dp))
+          Text("Buffering stream...", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
       }
     }

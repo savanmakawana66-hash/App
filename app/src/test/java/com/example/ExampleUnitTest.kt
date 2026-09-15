@@ -513,5 +513,52 @@ class ExampleUnitTest {
     // Cleanup
     viewModel.deleteRoom(room.id)
   }
+
+  @Test
+  fun testRealVideoPlaybackUriResolutionAndLocalServerStreaming() {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    val testUser = com.example.data.model.User(id = "TEST_HOST_ID", username = "HostTester")
+    val engine = com.example.network.WatchPartyNetworkEngine(app) { testUser }
+
+    // Test LocalMediaItem with content:// URI
+    val safUri = android.net.Uri.parse("content://com.android.providers.media.documents/document/video%3A1234")
+    val safItem = com.example.data.model.LocalMediaItem(
+      uri = safUri,
+      uriString = safUri.toString(),
+      title = "Camera Video 2026.mp4",
+      mimeType = "video/mp4",
+      durationSec = 180,
+      fileSizeBytes = 50 * 1024 * 1024L,
+      isSafSelected = true
+    )
+
+    assertEquals(safUri, safItem.getEffectiveUri())
+
+    // Host room and change media source
+    val room = engine.startHostParty(safItem, com.example.data.model.StreamQuality.HIGH_ORIGINAL, "Host Video Night")
+    assertNotNull(room)
+    assertEquals("Host Video Night", room.name)
+    assertEquals(safItem.title, room.activeMedia.title)
+
+    // Verify LAN streaming URL is constructed
+    assertTrue("Stream URL should point to local server port", room.streamUrl.contains("http://") || room.streamUrl.contains(":8080"))
+
+    // Test position update and sync
+    engine.updatePlaybackPosition(45.5f, 180)
+    assertEquals(45.5f, engine.activeParty.value?.positionSec ?: 0f, 0.01f)
+    assertEquals(180, engine.activeParty.value?.durationSec ?: 0)
+
+    // Test switching to preset stream
+    val presets = engine.getSampleMediaPresets()
+    val videoPreset = presets.first { it.mediaType == StreamMediaType.VIDEO }
+    engine.changeMediaSource(videoPreset)
+
+    val updatedRoom = engine.activeParty.value
+    assertNotNull(updatedRoom)
+    assertEquals(videoPreset.title, updatedRoom?.activeMedia?.title)
+    assertTrue("Preset should have valid streaming URI", updatedRoom?.activeMedia?.getEffectiveUri() != null)
+
+    engine.leaveParty()
+  }
 }
 

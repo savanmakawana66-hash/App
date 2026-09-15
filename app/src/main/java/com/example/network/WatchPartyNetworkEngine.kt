@@ -333,17 +333,41 @@ class WatchPartyNetworkEngine(
     _eventToast.tryEmit("Video Quality switched to ${quality.label}")
   }
 
+  fun updatePlaybackPosition(posSec: Float, durationSec: Int? = null) {
+    val party = _activeParty.value ?: return
+    if (!party.isHost) return
+    val newDuration = if (durationSec != null && durationSec > 0) durationSec else party.durationSec
+    val clamped = posSec.coerceIn(0f, newDuration.toFloat())
+    val diff = Math.abs(party.positionSec - clamped)
+    if (diff >= 0.4f || (durationSec != null && durationSec != party.durationSec)) {
+      val updated = party.copy(
+        positionSec = clamped,
+        durationSec = newDuration
+      )
+      _activeParty.value = updated
+      registeredParties[party.code] = updated
+      webRtcManager.currentPlaybackPosSec = clamped
+      ActiveRoomSessionManager.updatePlaybackState(party.code, party.isPlaying, clamped)
+    }
+  }
+
   fun changeMediaSource(newMedia: LocalMediaItem) {
     val party = _activeParty.value ?: return
     if (!party.isHost) return
+    localMediaServer.currentMedia = newMedia
+    val streamUrl = localMediaServer.getLanStreamUrl(party.hostId, party.code)
     val updated = party.copy(
       activeMedia = newMedia,
       durationSec = newMedia.durationSec,
       positionSec = 0f,
-      isPlaying = true
+      isPlaying = true,
+      streamUrl = streamUrl
     )
     _activeParty.value = updated
     registeredParties[party.code] = updated
+    webRtcManager.activeMedia = newMedia
+    webRtcManager.broadcastSeek(0f)
+    webRtcManager.broadcastPlayPause(true, 0f)
     _eventToast.tryEmit("Changed source: ${newMedia.title}")
   }
 
@@ -697,44 +721,61 @@ class WatchPartyNetworkEngine(
   fun getSampleMediaPresets(): List<LocalMediaItem> {
     return listOf(
       LocalMediaItem(
+        uriString = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
         title = "Cyberpunk: Edgerunners Ep. 1",
         mimeType = "video/mp4",
-        durationSec = 1420,
-        fileSizeBytes = 482344960L,
+        durationSec = 596,
+        fileSizeBytes = 158008374L,
         mediaType = StreamMediaType.VIDEO,
         resolution = "1080p FHD (60fps)",
         codec = "H.264 / AAC 5.1",
-        isLocalFile = true
+        isLocalFile = false
       ),
       LocalMediaItem(
-        title = "Interstellar Odyssey (4+ Hour Epic)",
+        uriString = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+        title = "Interstellar Odyssey (Sci-Fi Epic)",
         mimeType = "video/mp4",
-        durationSec = 15600, // 4 hours 20 mins!
-        fileSizeBytes = 5368709120L, // 5.0 GB
+        durationSec = 734,
+        fileSizeBytes = 168000000L,
         mediaType = StreamMediaType.VIDEO,
         resolution = "4K UHD (60fps)",
-        codec = "HEVC / DTS Surround",
-        isLocalFile = true
+        codec = "H.264 / DTS Surround",
+        isLocalFile = false
       ),
       LocalMediaItem(
-        title = "Synthwave Night Drive Vol. 4",
-        mimeType = "audio/mp3",
-        durationSec = 3600, // 1 hour music
+        uriString = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
+        title = "Synthwave Night Drive & Visuals",
+        mimeType = "video/mp4",
+        durationSec = 653,
         fileSizeBytes = 84934656L,
-        mediaType = StreamMediaType.AUDIO,
-        resolution = "320 kbps High Definition",
-        codec = "MP3 / Stereo",
-        isLocalFile = true
+        mediaType = StreamMediaType.VIDEO,
+        resolution = "1080p High Definition",
+        codec = "H.264 / Stereo",
+        isLocalFile = false
       ),
       LocalMediaItem(
-        title = "Lofi Study Beats & Rain",
-        mimeType = "audio/flac",
-        durationSec = 7200, // 2 hour album
-        fileSizeBytes = 325477376L,
+        uriString = "https://storage.googleapis.com/exoplayer-test-media-1/mp4/dizzy-short.mp4",
+        title = "Lofi Study Beats & Short Reel",
+        mimeType = "video/mp4",
+        durationSec = 120,
+        fileSizeBytes = 12547737L,
+        mediaType = StreamMediaType.VIDEO,
+        resolution = "720p HD",
+        codec = "H.264",
+        isLocalFile = false
+      ),
+      LocalMediaItem(
+        uriString = "https://storage.googleapis.com/exoplayer-test-media-0/play.mp3",
+        title = "Synthwave Chillout Radio & Beats",
+        mimeType = "audio/mpeg",
+        durationSec = 240,
+        fileSizeBytes = 5760000L,
         mediaType = StreamMediaType.AUDIO,
-        resolution = "Lossless FLAC (24-bit/48kHz)",
-        codec = "FLAC Lossless",
-        isLocalFile = true
+        resolution = "320 kbps High Fidelity",
+        codec = "MP3 / Stereo",
+        artist = "Lofi Producer",
+        album = "Night Vibes",
+        isLocalFile = false
       )
     )
   }

@@ -56,7 +56,7 @@ class WebRtcPeerConnectionManager(
 
   private var activeRoomCode: String = ""
   private var isHostRole: Boolean = false
-  private var activeMedia: LocalMediaItem? = null
+  var activeMedia: LocalMediaItem? = null
   private var currentQuality: StreamQuality = StreamQuality.HIGH_ORIGINAL
 
   private var signalingJob: Job? = null

@@ -59,6 +59,10 @@ data class LocalMediaItem(
         String.format("%02dm %02ds", m, s)
       }
     }
+
+  fun getEffectiveUri(): Uri? {
+    return uri ?: if (uriString.isNotBlank()) Uri.parse(uriString) else null
+  }
 }
 
 data class WatchPartyParticipant(
