@@ -644,6 +644,12 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
     if (seatIndex !in 0 until seats.size) return false
     val targetSeat = seats[seatIndex]
 
+    // Partner seats cannot be occupied while disabled by the room owner.
+    if (targetSeat.isPartnerSeat && _currentActiveRoom.value?.partnerSeatsEnabled != true) {
+      _eventMessages.tryEmit("Partner Seats are currently OFF.")
+      return false
+    }
+
     // OWNER SEAT RULE: Seat 0 is reserved for room owner
     if (targetSeat.isOwner && targetSeat.userId != null) {
       if (targetSeat.userId != _currentUser.value.id) {

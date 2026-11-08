@@ -92,7 +92,8 @@ fun RoomDetailScreen(
   onSetRoomGame: (gameType: String?, isEnabled: Boolean) -> Unit = { _, _ -> },
   onAddAdmin: (userId: String, username: String) -> Unit = { _, _ -> },
   onRemoveAdmin: (userId: String) -> Unit = {},
-  onDeleteRoom: () -> Unit = {}
+  onDeleteRoom: () -> Unit = {},
+  onTogglePartnerSeats: (Boolean) -> Unit = {}
 ) {
   val context = LocalContext.current
   val isOwner = room.ownerId == currentUser.id
@@ -567,6 +568,74 @@ fun RoomDetailScreen(
               .fillMaxWidth()
               .padding(vertical = 12.dp, horizontal = 8.dp)
           ) {
+
+            // PARTNER SEATS: TWO SPECIAL SEATS (INDEX 8 AND 9)
+            Row(
+              modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+              Text(
+                text = "💖 Partner Seats",
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+              )
+
+              if (isOwner) {
+                Switch(
+                  checked = room.partnerSeatsEnabled,
+                  onCheckedChange = onTogglePartnerSeats
+                )
+              } else {
+                Text(
+                  text = if (room.partnerSeatsEnabled) "ON" else "OFF",
+                  color = if (room.partnerSeatsEnabled) Color(0xFF10B981) else Color.Gray,
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.Bold
+                )
+              }
+            }
+
+            if (room.partnerSeatsEnabled) {
+              Row(
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+              ) {
+                for (i in 8..9) {
+                  val seat = seats.find { it.seatIndex == i }
+                    ?: RoomSeat(
+                      seatIndex = i,
+                      isPartnerSeat = true,
+                      partnerLabel = "Partner ${i - 7}"
+                    )
+
+                  VoiceSeatItem(
+                    seat = seat,
+                    isCurrentUser = seat.userId == currentUser.id,
+                    theme = theme,
+                    onTakeSeat = { onTakeSeat(i) },
+                    onInspectUser = {
+                      if (seat.userId != null && seat.username != null) {
+                        onInspectUser(
+                          Friend(
+                            userId = seat.userId,
+                            username = seat.username,
+                            avatar = seat.avatar ?: "avatar_1"
+                          )
+                        )
+                      }
+                    }
+                  )
+                }
+              }
+
+              Spacer(modifier = Modifier.height(12.dp))
+            }
+
             // Row 1: Seats 0..3
             Row(
               horizontalArrangement = Arrangement.SpaceAround,
@@ -1115,7 +1184,7 @@ fun VoiceSeatItem(
       Spacer(modifier = Modifier.height(4.dp))
 
       Text(
-        text = "Seat ${seat.seatIndex + 1}",
+        text = if (seat.isPartnerSeat) seat.partnerLabel ?: "Partner Seat" else "Seat ${seat.seatIndex + 1}",
         fontSize = 10.sp,
         color = Color.White.copy(alpha = 0.65f),
         fontWeight = FontWeight.Medium,
