@@ -115,5 +115,37 @@ data class WatchPartyRoom(
   val totalStreamedBytes: Long = 0L,
   val isHost: Boolean = false,
   val streamUrl: String = "",
-  val errorBanner: String? = null
-)
+  val errorBanner: String? = null,
+  val playlist: List<LocalMediaItem> = emptyList(),
+  val currentQueueIndex: Int = 0,
+  val subtitleUriString: String? = null,
+  val subtitleName: String? = null,
+  val subtitlesEnabled: Boolean = false,
+  val playbackSpeed: Float = 1.0f,
+  val seats: List<RoomSeat> = defaultVideoRoomSeats(hostId, hostName)
+) {
+  companion object {
+    fun defaultVideoRoomSeats(hostId: String, hostName: String): List<RoomSeat> {
+      return List(12) { idx ->
+        if (idx == 0) {
+          RoomSeat(
+            seatIndex = 0,
+            userId = hostId,
+            username = hostName,
+            avatar = "avatar_1",
+            isOwner = true,
+            isAdmin = true
+          )
+        } else {
+          RoomSeat(seatIndex = idx)
+        }
+      }
+    }
+  }
+
+  val nextMedia: LocalMediaItem?
+    get() = if (playlist.isNotEmpty() && currentQueueIndex + 1 < playlist.size) playlist[currentQueueIndex + 1] else null
+
+  val isPlaylistFinished: Boolean
+    get() = playlist.isNotEmpty() && currentQueueIndex >= playlist.size
+}

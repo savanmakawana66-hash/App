@@ -22,6 +22,7 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
   val backendApi = context?.let { ctx -> secureStorage?.let { sec -> com.example.network.api.RealBackendApiClient(ctx, sec) } }
   val connectivityMonitor = context?.let { com.example.network.NetworkConnectivityMonitor(it) }
   val signalingClient = secureStorage?.let { com.example.network.webrtc.SecureWebSocketSignalingClient(it) }
+  val videoUploadRepository = context?.let { VideoUploadRepository(it) }
 
   private val _fallbackStatus = MutableStateFlow(com.example.network.ConnectionStatus.ONLINE)
   val connectionStatus: StateFlow<com.example.network.ConnectionStatus> =
@@ -521,6 +522,7 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
     // Seed 8 voice seats: Seat 0 has Owner
     val initialSeats = mutableListOf<RoomSeat>()
 
+    val isOwnerOffline = !targetRoom.isOwnerOnline
     if (isUserOwner) {
       initialSeats.add(
         RoomSeat(
@@ -529,14 +531,15 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
           username = _currentUser.value.username,
           avatar = _currentUser.value.avatar,
           isOwner = true,
-          isAdmin = true
+          isAdmin = true,
+          isOwnerOffline = false
         )
       )
       for (i in 1..7) {
         initialSeats.add(RoomSeat(seatIndex = i))
       }
     } else {
-      // Owner is in Seat 0
+      // Owner is in Seat 0 (permanently reserved; displays dimmed if owner is offline)
       initialSeats.add(
         RoomSeat(
           seatIndex = 0,
@@ -544,7 +547,8 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
           username = targetRoom.ownerName,
           avatar = "avatar_1",
           isOwner = true,
-          isAdmin = false
+          isAdmin = false,
+          isOwnerOffline = isOwnerOffline
         )
       )
       // Seat user in seat 1 if available
@@ -561,6 +565,9 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
         initialSeats.add(RoomSeat(seatIndex = i))
       }
     }
+    // Add 2 special Partner Seats (indices 8 and 9)
+    initialSeats.add(RoomSeat(seatIndex = 8, isPartnerSeat = true, partnerLabel = "Partner 1"))
+    initialSeats.add(RoomSeat(seatIndex = 9, isPartnerSeat = true, partnerLabel = "Partner 2"))
     _roomSeats.value = initialSeats
 
     // Check if current user is in a seat or audience
@@ -634,17 +641,32 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
   // -------------------------------------------------------------
   fun takeSeat(seatIndex: Int): Boolean {
     val seats = _roomSeats.value
-    if (seatIndex !in 0..7) return false
+    if (seatIndex !in 0 until seats.size) return false
     val targetSeat = seats[seatIndex]
+
+    // OWNER SEAT RULE: Seat 0 is reserved for room owner
+    if (targetSeat.isOwner && targetSeat.userId != null) {
+      if (targetSeat.userId != _currentUser.value.id) {
+        _eventMessages.tryEmit("Seat 1 is permanently reserved for the room owner.")
+        return false
+      }
+      return true
+    }
+
     if (targetSeat.userId != null) {
-      _eventMessages.tryEmit("Seat ${seatIndex + 1} is already occupied")
+      val seatLabel = if (targetSeat.isPartnerSeat) targetSeat.partnerLabel ?: "Partner Seat" else "Seat ${seatIndex + 1}"
+      _eventMessages.tryEmit("$seatLabel is already occupied")
       return false
     }
 
-    // Leave any existing seat
+    // Leave any existing seat (unless owner in seat 0)
     val updatedSeats = seats.mapIndexed { i, seat ->
       if (seat.userId == _currentUser.value.id) {
-        seat.copy(userId = null, username = null, avatar = null, isSpeaking = false)
+        if (seat.isOwner) {
+          seat.copy(isOwnerOffline = true, isSpeaking = false)
+        } else {
+          seat.copy(userId = null, username = null, avatar = null, isSpeaking = false)
+        }
       } else if (i == seatIndex) {
         val isOwner = _currentActiveRoom.value?.ownerId == _currentUser.value.id
         val admins = _roomAdmins.value[_currentActiveRoom.value?.id] ?: emptyList()
@@ -655,7 +677,8 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
           avatar = _currentUser.value.avatar,
           isOwner = isOwner,
           isAdmin = isAdmin,
-          isMuted = false
+          isMuted = false,
+          isOwnerOffline = false
         )
       } else {
         seat
@@ -670,17 +693,30 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
       10
     )
     refreshCoinWallet()
-    _eventMessages.tryEmit("You took Voice Seat ${seatIndex + 1} 🎙️")
+    val seatLabel = if (targetSeat.isPartnerSeat) targetSeat.partnerLabel ?: "Partner Seat" else "Voice Seat ${seatIndex + 1}"
+    _eventMessages.tryEmit("You took $seatLabel 🎙️")
     return true
   }
 
   fun leaveSeat(): Boolean {
+    val currentRoom = _currentActiveRoom.value
+    if (currentRoom != null && currentRoom.ownerId == _currentUser.value.id) {
+      if (currentRoom.isVideoRoomEnabled || currentRoom.roomType == RoomType.VIDEO) {
+        _eventMessages.tryEmit("The room owner must always occupy the first seat in the Video Room.")
+        return false
+      }
+    }
     var removed = false
     _roomSeats.update { seats ->
       seats.map {
         if (it.userId == _currentUser.value.id) {
           removed = true
-          it.copy(userId = null, username = null, avatar = null, isSpeaking = false, isMuted = false)
+          if (it.isOwner) {
+            // Keep reserved state for owner
+            it.copy(isSpeaking = false, isMuted = true, isOwnerOffline = true)
+          } else {
+            it.copy(userId = null, username = null, avatar = null, isSpeaking = false, isMuted = false)
+          }
         } else it
       }
     }
@@ -1282,6 +1318,172 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
     return true
   }
 
+  fun sendMultiRecipientGift(roomId: String, recipientUserIds: List<String>, giftId: String): Boolean {
+    val user = _currentUser.value
+    val res = com.example.network.security.ServerCoinManager.sendMultiRecipientGift(user.id, recipientUserIds, giftId)
+    if (res.isFailure) {
+      val msg = res.exceptionOrNull()?.message ?: "Gifting failed"
+      _eventMessages.tryEmit(msg)
+      return false
+    }
+
+    val (txn, charmPerRecipient) = res.getOrThrow()
+    val gift = VirtualGift.findById(giftId)
+    refreshCoinWallet()
+
+    val msg = ChatMessage(
+      id = UUID.randomUUID().toString(),
+      roomId = roomId,
+      senderId = user.id,
+      senderName = user.username,
+      senderAvatar = user.avatar,
+      senderRole = "GIFT",
+      text = "sent ${gift?.emoji ?: "🎁"} ${gift?.name} to ${recipientUserIds.size} recipient(s)! (+$charmPerRecipient Charm Points each)",
+      timestamp = System.currentTimeMillis()
+    )
+    _roomChatMessages.update { it + msg }
+
+    awardRoomXp(roomId, kotlin.math.abs(txn.amount), "Multi-Recipient Gift: ${gift?.name}")
+    addPersonalXp(kotlin.math.abs(txn.amount) / 2, "Sent Multi Gift: ${gift?.name}")
+    _eventMessages.tryEmit("Sent ${gift?.emoji} ${gift?.name} to ${recipientUserIds.size} recipient(s)! ✨")
+    return true
+  }
+
+  fun switchRoomType(roomId: String, newType: RoomType): Boolean {
+    val current = _currentActiveRoom.value?.takeIf { it.id == roomId }
+      ?: _rooms.value.find { it.id == roomId }
+      ?: return false
+
+    val res = com.example.network.security.ServerCoinManager.switchRoomType(current, newType, _currentUser.value.id)
+    if (res.isFailure) {
+      val msg = res.exceptionOrNull()?.message ?: "Failed to switch room type"
+      _eventMessages.tryEmit(msg)
+      return false
+    }
+
+    val updated = res.getOrThrow()
+    _rooms.update { list -> list.map { if (it.id == roomId) updated else it } }
+    if (_currentActiveRoom.value?.id == roomId) {
+      _currentActiveRoom.value = updated
+      if (newType == RoomType.COUPLE) {
+        _roomSeats.value = _roomSeats.value.take(2)
+      } else if (_roomSeats.value.size < 8) {
+        _roomSeats.value = List(8) { index -> _roomSeats.value.getOrNull(index) ?: RoomSeat(seatIndex = index) }
+      }
+    }
+    _eventMessages.tryEmit("Room type converted to ${newType.displayName}! 🔄")
+    postSystemMessage("Room mode updated to ${newType.displayName}")
+    return true
+  }
+
+  fun openMysteryBox(): VirtualGift? {
+    val user = _currentUser.value
+    val res = com.example.network.security.ServerCoinManager.openMysteryBox(user.id)
+    if (res.isFailure) {
+      val msg = res.exceptionOrNull()?.message ?: "Could not open Mystery Box"
+      _eventMessages.tryEmit(msg)
+      return null
+    }
+
+    val (_, rewardGift) = res.getOrThrow()
+    refreshCoinWallet()
+    _eventMessages.tryEmit("🎉 Congratulations! You received ${rewardGift.emoji} ${rewardGift.name}!")
+    return rewardGift
+  }
+
+  fun purchaseAndProposeRing(receiverId: String, receiverName: String, ringId: String): Boolean {
+    val user = _currentUser.value
+    val res = com.example.network.security.ServerCoinManager.purchaseAndProposeRing(
+      senderId = user.id,
+      senderName = user.username,
+      receiverId = receiverId,
+      receiverName = receiverName,
+      ringId = ringId
+    )
+    if (res.isFailure) {
+      val msg = res.exceptionOrNull()?.message ?: "Failed to propose ring"
+      _eventMessages.tryEmit(msg)
+      return false
+    }
+
+    val (_, bond) = res.getOrThrow()
+    refreshCoinWallet()
+    _eventMessages.tryEmit("Sent ring proposal: ${bond.ringName} to $receiverName! 💍")
+    return true
+  }
+
+  fun respondToRingBond(bondId: String, accept: Boolean): Boolean {
+    val user = _currentUser.value
+    val res = com.example.network.security.ServerCoinManager.respondToRingBond(bondId, user.id, accept)
+    if (res.isFailure) {
+      val msg = res.exceptionOrNull()?.message ?: "Failed to respond to ring proposal"
+      _eventMessages.tryEmit(msg)
+      return false
+    }
+
+    val bond = res.getOrThrow()
+    refreshCoinWallet()
+    if (accept) {
+      _eventMessages.tryEmit("Accepted couple bond with ${bond.senderUsername}! 💍❤️ (+$${bond.charmPointsGranted} Charm Points)")
+    } else {
+      _eventMessages.tryEmit("Declined couple bond.")
+    }
+    return true
+  }
+
+  fun purchaseRelationshipTag(targetId: String, targetName: String, type: RelationshipTagType): Boolean {
+    val user = _currentUser.value
+    val res = com.example.network.security.ServerCoinManager.purchaseRelationshipTag(
+      requesterId = user.id,
+      requesterName = user.username,
+      targetId = targetId,
+      targetName = targetName,
+      type = type
+    )
+    if (res.isFailure) {
+      val msg = res.exceptionOrNull()?.message ?: "Failed to purchase relationship tag"
+      _eventMessages.tryEmit(msg)
+      return false
+    }
+
+    val (_, tag) = res.getOrThrow()
+    refreshCoinWallet()
+    _eventMessages.tryEmit("Requested ${type.label} tag with $targetName! 🤝")
+    return true
+  }
+
+  fun respondToRelationshipTag(tagId: String, accept: Boolean): Boolean {
+    val user = _currentUser.value
+    val res = com.example.network.security.ServerCoinManager.respondToRelationshipTag(tagId, user.id, accept)
+    if (res.isFailure) {
+      val msg = res.exceptionOrNull()?.message ?: "Failed to respond to tag request"
+      _eventMessages.tryEmit(msg)
+      return false
+    }
+
+    val tag = res.getOrThrow()
+    if (accept) {
+      _eventMessages.tryEmit("Accepted ${tag.type.label} relationship tag! ✨")
+    } else {
+      _eventMessages.tryEmit("Declined tag request.")
+    }
+    return true
+  }
+
+  fun purchaseAvatar(avatarKey: String, avatarName: String, validity: AvatarValidityDays): Boolean {
+    val user = _currentUser.value
+    val res = com.example.network.security.ServerCoinManager.purchaseAvatar(user.id, avatarKey, avatarName, validity)
+    if (res.isFailure) {
+      val msg = res.exceptionOrNull()?.message ?: "Failed to purchase avatar frame"
+      _eventMessages.tryEmit(msg)
+      return false
+    }
+
+    refreshCoinWallet()
+    _eventMessages.tryEmit("Purchased $avatarName (${validity.days} days validity)! 🖼️")
+    return true
+  }
+
   fun setRoomGame(roomId: String, gameType: String?, isEnabled: Boolean) {
     _rooms.update { list ->
       list.map { r ->
@@ -1298,10 +1500,42 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
     if (isEnabled && gameType != null) {
       postSystemMessage("🎮 Game started: $gameType")
       _eventMessages.tryEmit("Game started: $gameType")
-    } else {
-      postSystemMessage("Game session ended.")
-      _eventMessages.tryEmit("Game closed.")
     }
+  }
+
+  fun togglePartnerSeats(roomId: String, enabled: Boolean): Boolean {
+    val room = _currentActiveRoom.value?.takeIf { it.id == roomId }
+      ?: _rooms.value.find { it.id == roomId }
+      ?: return false
+
+    if (room.ownerId != _currentUser.value.id) {
+      _eventMessages.tryEmit("Only the room owner can configure Partner Seats.")
+      return false
+    }
+
+    val updated = room.copy(partnerSeatsEnabled = enabled)
+    _rooms.update { list -> list.map { if (it.id == roomId) updated else it } }
+    if (_currentActiveRoom.value?.id == roomId) {
+      _currentActiveRoom.value = updated
+    }
+    _eventMessages.tryEmit(if (enabled) "Partner Seats enabled (ON) 💖" else "Partner Seats disabled (OFF)")
+    return true
+  }
+
+  fun setOwnerOnline(roomId: String, isOnline: Boolean) {
+    _rooms.update { list ->
+      list.map { r -> if (r.id == roomId) r.copy(isOwnerOnline = isOnline) else r }
+    }
+    if (_currentActiveRoom.value?.id == roomId) {
+      _currentActiveRoom.update { it?.copy(isOwnerOnline = isOnline) }
+      _roomSeats.update { seats ->
+        seats.map { s ->
+          if (s.isOwner) s.copy(isOwnerOffline = !isOnline) else s
+        }
+      }
+    }
+    com.example.network.ActiveRoomSessionManager.setOwnerOnlineStatus(roomId, isOnline)
+    _eventMessages.tryEmit(if (isOnline) "Owner is now online 🟢" else "Owner went offline (Reserved seat active) 💤")
   }
 
   // -------------------------------------------------------------

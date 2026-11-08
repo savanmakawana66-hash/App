@@ -31,11 +31,11 @@ fun JoinWatchPartyDialog(
   onDismiss: () -> Unit,
   onJoinSuccess: () -> Unit
 ) {
-  var roomCode by remember { mutableStateOf("WP-7842") }
+  var roomCode by remember { mutableStateOf("") }
   var password by remember { mutableStateOf("") }
   var errorMessage by remember { mutableStateOf<String?>(null) }
 
-  val activeParties = remember { WatchPartyNetworkEngine.registeredParties.values.toList() }
+  val activeSessions by com.example.network.ActiveRoomSessionManager.activeRooms.collectAsState()
 
   Dialog(onDismissRequest = onDismiss) {
     Surface(
@@ -151,7 +151,7 @@ fun JoinWatchPartyDialog(
         Spacer(modifier = Modifier.height(14.dp))
 
         // Quick Pick from Active Rooms
-        if (activeParties.isNotEmpty()) {
+        if (activeSessions.isNotEmpty()) {
           Text(
             text = "Active Live Rooms Available:",
             color = TextSecondary,
@@ -160,16 +160,16 @@ fun JoinWatchPartyDialog(
           )
           Spacer(modifier = Modifier.height(6.dp))
           Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            activeParties.take(3).forEach { party ->
+            activeSessions.take(3).forEach { session ->
               Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = DarkSurfaceCard,
-                border = BorderStroke(1.dp, if (roomCode == party.code) IndigoPrimary else DarkSurfaceBorder),
+                border = BorderStroke(1.dp, if (roomCode == session.roomId) IndigoPrimary else DarkSurfaceBorder),
                 modifier = Modifier
                   .fillMaxWidth()
                   .clickable {
-                    roomCode = party.code
-                    password = party.password
+                    roomCode = session.roomId
+                    password = session.password
                   }
               ) {
                 Row(
@@ -180,13 +180,13 @@ fun JoinWatchPartyDialog(
                   Spacer(modifier = Modifier.width(8.dp))
                   Column(modifier = Modifier.weight(1f)) {
                     Text(
-                      text = "${party.name} (${party.code})",
+                      text = "${session.name} (${session.roomId})",
                       color = Color.White,
                       fontSize = 12.sp,
                       fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                      text = "Host: ${party.hostName} • ${party.participants.size} watching",
+                      text = "Host: ${session.hostName} • ${session.participantCount} watching",
                       color = TextSecondary,
                       fontSize = 10.sp
                     )

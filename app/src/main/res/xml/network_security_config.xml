@@ -1,16 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Prohibit cleartext HTTP globally for production security -->
-    <base-config cleartextTrafficPermitted="false">
+    <!-- Base config permits cleartext HTTP for local/LAN peer-to-peer media streaming
+         (required for embedded byte-range HTTP server on dynamic local Wi-Fi / hotspot IPs) -->
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
 
-    <!-- Enforce HTTPS & TLS 1.3 / 1.2 on cloud backend domains -->
+    <!-- Strict HTTPS & TLS enforcement for cloud backend and external APIs -->
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">asia-southeast1.run.app</domain>
+        <domain includeSubdomains="true">run.app</domain>
         <domain includeSubdomains="true">google.com</domain>
+        <domain includeSubdomains="true">googleapis.com</domain>
+        <domain includeSubdomains="true">firebaseio.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
+    <!-- Explicitly permit cleartext for local loopback and emulator endpoints -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">10.0.2.2</domain>
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

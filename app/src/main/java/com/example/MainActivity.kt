@@ -48,20 +48,46 @@ import com.example.ui.viewmodel.BottomNavTab
 import com.example.ui.viewmodel.MainViewModel
 
 class MainActivity : ComponentActivity() {
+  private val _isInPipMode = mutableStateOf(false)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
     setContent {
       MyApplicationTheme {
-        WatchTogetherApp()
+        WatchTogetherApp(
+          isInPipMode = _isInPipMode.value,
+          onEnterPip = {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+              try {
+                val params = android.app.PictureInPictureParams.Builder()
+                  .setAspectRatio(android.util.Rational(16, 9))
+                  .build()
+                enterPictureInPictureMode(params)
+              } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "Failed to enter PiP mode", e)
+              }
+            }
+          }
+        )
       }
     }
+  }
+
+  override fun onPictureInPictureModeChanged(
+    isInPictureInPictureMode: Boolean,
+    newConfig: android.content.res.Configuration
+  ) {
+    super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+    _isInPipMode.value = isInPictureInPictureMode
   }
 }
 
 @Composable
 fun WatchTogetherApp(
-  viewModel: MainViewModel = viewModel()
+  viewModel: MainViewModel = viewModel(),
+  isInPipMode: Boolean = false,
+  onEnterPip: () -> Unit = {}
 ) {
   val context = LocalContext.current
 
@@ -174,6 +200,8 @@ fun WatchTogetherApp(
         WatchPartyStageScreen(
           engine = viewModel.networkEngine,
           party = activeWatchParty!!,
+          isInPipMode = isInPipMode,
+          onEnterPip = onEnterPip,
           onLeave = { viewModel.leaveWatchParty() }
         )
       }
@@ -223,7 +251,8 @@ fun WatchTogetherApp(
           onSetRoomGame = { gameType, isEnabled -> viewModel.setRoomGame(currentActiveRoom!!.id, gameType, isEnabled) },
           onAddAdmin = { userId, username -> viewModel.addRoomAdmin(currentActiveRoom!!.id, userId, username) },
           onRemoveAdmin = { userId -> viewModel.removeRoomAdmin(currentActiveRoom!!.id, userId) },
-          onDeleteRoom = { viewModel.deleteRoom(currentActiveRoom!!.id) }
+          onDeleteRoom = { viewModel.deleteRoom(currentActiveRoom!!.id) },
+          onTogglePartnerSeats = { enabled -> viewModel.togglePartnerSeats(currentActiveRoom!!.id, enabled) }
         )
       }
 

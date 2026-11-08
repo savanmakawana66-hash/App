@@ -46,6 +46,18 @@ class MainViewModel @JvmOverloads constructor(
         }
       }
     }
+
+    // Periodic synchronization of active remote watch party sessions from backend
+    viewModelScope.launch {
+      while (true) {
+        try {
+          repository.backendApi?.fetchActiveWatchParties()?.getOrNull()?.forEach { session ->
+            com.example.network.ActiveRoomSessionManager.createSession(session)
+          }
+        } catch (_: Exception) {}
+        delay(4000L)
+      }
+    }
   }
 
   // Primary bottom navigation: EXACTLY 4 sections: 1. ROOM, 2. DM, 3. GAMES, 4. PROFILE
@@ -315,8 +327,8 @@ class MainViewModel @JvmOverloads constructor(
       return false
     }
 
-    // Try joining as watch party first if registered
-    if (com.example.network.WatchPartyNetworkEngine.registeredParties.containsKey(session.roomId)) {
+    // Try joining as watch party first if registered or if it's a Watch Party room
+    if (session.roomId.startsWith("WP-", ignoreCase = true) || com.example.network.WatchPartyNetworkEngine.registeredParties.containsKey(session.roomId)) {
       val success = networkEngine.joinPartyByCode(session.roomId, passwordAttempt)
       if (success) {
         _showJoinWatchPartyDialog.value = false
@@ -424,6 +436,46 @@ class MainViewModel @JvmOverloads constructor(
 
   fun sendRoomGift(roomId: String, giftName: String, giftEmoji: String, coinCost: Int): Boolean {
     return repository.sendRoomGift(roomId, giftName, giftEmoji, coinCost)
+  }
+
+  fun sendMultiRecipientGift(roomId: String, recipientUserIds: List<String>, giftId: String): Boolean {
+    return repository.sendMultiRecipientGift(roomId, recipientUserIds, giftId)
+  }
+
+  fun switchRoomType(roomId: String, newType: RoomType): Boolean {
+    return repository.switchRoomType(roomId, newType)
+  }
+
+  fun openMysteryBox(): VirtualGift? {
+    return repository.openMysteryBox()
+  }
+
+  fun purchaseAndProposeRing(receiverId: String, receiverName: String, ringId: String): Boolean {
+    return repository.purchaseAndProposeRing(receiverId, receiverName, ringId)
+  }
+
+  fun respondToRingBond(bondId: String, accept: Boolean): Boolean {
+    return repository.respondToRingBond(bondId, accept)
+  }
+
+  fun purchaseRelationshipTag(targetId: String, targetName: String, type: RelationshipTagType): Boolean {
+    return repository.purchaseRelationshipTag(targetId, targetName, type)
+  }
+
+  fun respondToRelationshipTag(tagId: String, accept: Boolean): Boolean {
+    return repository.respondToRelationshipTag(tagId, accept)
+  }
+
+  fun purchaseAvatar(avatarKey: String, avatarName: String, validity: AvatarValidityDays): Boolean {
+    return repository.purchaseAvatar(avatarKey, avatarName, validity)
+  }
+
+  fun togglePartnerSeats(roomId: String, enabled: Boolean): Boolean {
+    return repository.togglePartnerSeats(roomId, enabled)
+  }
+
+  fun setOwnerOnline(roomId: String, isOnline: Boolean) {
+    repository.setOwnerOnline(roomId, isOnline)
   }
 
   fun setRoomGame(roomId: String, gameType: String?, isEnabled: Boolean) {

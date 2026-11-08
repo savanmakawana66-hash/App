@@ -22,7 +22,11 @@ class WatchPartyNetworkEngine(
   private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
   val localMediaServer = LocalMediaServer(context)
+  val mediaPublisher = MediaStreamPublisher(context)
   val voiceRoomManager = VoiceRoomManager(context)
+  val secureStorage = com.example.data.security.SecureStorageManager(context)
+  val signalingClient = SecureWebSocketSignalingClient(secureStorage)
+  val backendApiClient = com.example.network.api.RealBackendApiClient(context, secureStorage)
   val webRtcManager = WebRtcPeerConnectionManager(context) { currentUserProvider().id }
 
   private val _activeParty = MutableStateFlow<WatchPartyRoom?>(null)
@@ -30,6 +34,9 @@ class WatchPartyNetworkEngine(
 
   private val _eventToast = MutableSharedFlow<String>(extraBufferCapacity = 1)
   val eventToast: SharedFlow<String> = _eventToast.asSharedFlow()
+
+  val incomingChatMessages: SharedFlow<JSONObject> = signalingClient.chatMessages
+  val incomingReactions: SharedFlow<String> = signalingClient.reactionBursts
 
   // Heartbeat / sync clock loop
   private var syncClockJob: Job? = null
@@ -44,6 +51,72 @@ class WatchPartyNetworkEngine(
   init {
     observeVoiceActivity()
     observeWebRtcEvents()
+    observeWebSocketEvents()
+  }
+
+  private fun observeWebSocketEvents() {
+    scope.launch {
+      signalingClient.playbackUpdates.collect { event ->
+        val current = _activeParty.value ?: return@collect
+        if (!current.isHost) {
+          val now = System.currentTimeMillis()
+          val elapsedSinceServer = (now - event.serverTimestamp).coerceAtLeast(0L) / 1000f
+          val targetPos = if (event.isPlaying) event.positionSec + elapsedSinceServer else event.positionSec
+          _activeParty.value = current.copy(
+            isPlaying = event.isPlaying,
+            positionSec = targetPos,
+            playbackSpeed = event.playbackSpeed
+          )
+        }
+      }
+    }
+
+    scope.launch {
+      signalingClient.mediaChangeUpdates.collect { json ->
+        val current = _activeParty.value ?: return@collect
+        if (!current.isHost) {
+          val mediaJson = json.optJSONObject("mediaInfo")
+          val streamUrl = json.optString("streamUrl", current.streamUrl)
+          val pos = json.optDouble("positionSec", 0.0).toFloat()
+          val newMedia = if (mediaJson != null) {
+            LocalMediaItem(
+              title = mediaJson.optString("title", "Remote Stream"),
+              durationSec = mediaJson.optInt("durationSec", 1800),
+              fileSizeBytes = mediaJson.optLong("fileSizeBytes", 100000000L),
+              mimeType = mediaJson.optString("mimeType", "video/mp4"),
+              mediaType = try { StreamMediaType.valueOf(mediaJson.optString("mediaType", "VIDEO")) } catch (_: Exception) { StreamMediaType.VIDEO },
+              uriString = streamUrl,
+              isLocalFile = false,
+              isSafSelected = false
+            )
+          } else current.activeMedia
+
+          _activeParty.value = current.copy(
+            activeMedia = newMedia,
+            streamUrl = streamUrl,
+            positionSec = pos,
+            isPlaying = true
+          )
+          _eventToast.tryEmit("Now Playing: ${newMedia.title}")
+        }
+      }
+    }
+
+    scope.launch {
+      signalingClient.connectionState.collect { state ->
+        val current = _activeParty.value ?: return@collect
+        val mapped = when (state) {
+          WebRtcPeerConnectionState.CONNECTED -> PartyConnectionState.CONNECTED
+          WebRtcPeerConnectionState.CONNECTING -> PartyConnectionState.SYNCING
+          WebRtcPeerConnectionState.DISCONNECTED, WebRtcPeerConnectionState.FAILED -> PartyConnectionState.RECONNECTING
+          WebRtcPeerConnectionState.CLOSED -> PartyConnectionState.DISCONNECTED
+          else -> current.connectionState
+        }
+        if (current.connectionState != mapped) {
+          _activeParty.value = current.copy(connectionState = mapped)
+        }
+      }
+    }
   }
 
   private fun observeWebRtcEvents() {
@@ -118,11 +191,15 @@ class WatchPartyNetworkEngine(
     val currentUser = currentUserProvider()
     val code = "WP-" + (1000..9999).random()
 
-    // 1. Start embedded HTTP byte-range server on host device
-    val streamUrl = localMediaServer.start(media)
+    // 1. Start embedded HTTP byte-range server on host device (for local LAN playback)
+    val localStreamUrl = localMediaServer.start(media)
     localMediaServer.currentQuality = quality
 
-    // 2. Automatically join voice room for host
+    // 2. Publish media to remote streaming backend for internet participants
+    val remoteStreamUrl = mediaPublisher.publishMediaForRemoteParticipants(code, media, currentUser.id)
+    val effectiveStreamUrl = if (remoteStreamUrl.isNotBlank()) remoteStreamUrl else localStreamUrl
+
+    // 3. Automatically join voice room for host
     voiceRoomManager.joinVoice()
 
     val hostParticipant = WatchPartyParticipant(
@@ -155,13 +232,15 @@ class WatchPartyNetworkEngine(
       streamBitrateKbps = quality.bitrateKbps.toFloat(),
       totalStreamedBytes = 0L,
       isHost = true,
-      streamUrl = streamUrl
+      streamUrl = effectiveStreamUrl,
+      playlist = listOf(media),
+      currentQueueIndex = 0
     )
 
     _activeParty.value = party
     registeredParties[code] = party
 
-    // Register with real-time Active Room Session backend
+    // 4. Register with real-time Active Room Session backend
     val activeSession = ActiveRoomSession(
       roomId = code,
       name = party.name,
@@ -181,9 +260,13 @@ class WatchPartyNetworkEngine(
       createdAtMs = System.currentTimeMillis(),
       lastHeartbeatMs = System.currentTimeMillis(),
       isClosed = false,
-      streamUrl = streamUrl
+      streamUrl = effectiveStreamUrl
     )
     ActiveRoomSessionManager.createSession(activeSession)
+
+    // 5. Connect and register room over WebSocket relay
+    signalingClient.connect(code, currentUser.id, currentUser.username)
+    signalingClient.sendCreateRoom(code, media, effectiveStreamUrl, currentUser.id, currentUser.username, password)
 
     // Start periodic Host Heartbeat transmission (Every 3 seconds)
     startHostHeartbeatLoop(code, currentUser.id)
@@ -209,6 +292,7 @@ class WatchPartyNetworkEngine(
             participantCount = current.participants.size,
             connectionState = current.connectionState
           )
+          signalingClient.sendHeartbeat(current.positionSec, current.isPlaying)
         } else {
           break
         }
@@ -224,13 +308,48 @@ class WatchPartyNetworkEngine(
 
     // Enforce Active Room Verification in real-time backend
     val validation = ActiveRoomSessionManager.validateJoin(cleanCode, passwordAttempt)
-    if (validation.isFailure) {
-      val errorMsg = validation.exceptionOrNull()?.message ?: "This room is no longer active."
+    val session = validation.getOrNull() ?: ActiveRoomSessionManager.getActiveSession(cleanCode)
+
+    if (validation.isFailure && session == null) {
+      val errorMsg = validation.exceptionOrNull()?.message ?: "Room code '$cleanCode' not found or host has gone offline."
       _eventToast.tryEmit(errorMsg)
       return false
     }
 
-    val party = registeredParties[cleanCode]
+    val party = registeredParties[cleanCode] ?: session?.let { s ->
+      val remoteMedia = LocalMediaItem(
+        title = s.mediaTitle,
+        durationSec = s.durationSec,
+        fileSizeBytes = 200_000_000L,
+        mimeType = "video/mp4",
+        mediaType = s.mediaType,
+        uriString = s.streamUrl.ifBlank { com.example.network.api.BackendServerConfig.getRemoteStreamUrl(s.roomId) },
+        isLocalFile = false,
+        isSafSelected = false
+      )
+      WatchPartyRoom(
+        code = s.roomId,
+        name = s.name,
+        hostId = s.hostId,
+        hostName = s.hostName,
+        isPrivate = s.isPrivate,
+        password = s.password,
+        activeMedia = remoteMedia,
+        currentQuality = s.currentQuality,
+        isPlaying = s.isPlaying,
+        positionSec = s.currentPositionSec,
+        durationSec = s.durationSec,
+        connectionState = PartyConnectionState.CONNECTED,
+        participants = emptyList(),
+        streamBitrateKbps = s.currentQuality.bitrateKbps.toFloat(),
+        totalStreamedBytes = 0L,
+        isHost = false,
+        streamUrl = s.streamUrl.ifBlank { com.example.network.api.BackendServerConfig.getRemoteStreamUrl(s.roomId) },
+        playlist = listOf(remoteMedia),
+        currentQueueIndex = 0
+      )
+    }
+
     if (party == null) {
       _eventToast.tryEmit("Room code '$cleanCode' not found or host has gone offline.")
       return false
@@ -270,6 +389,10 @@ class WatchPartyNetworkEngine(
     // Update real-time participant count in session registry
     ActiveRoomSessionManager.updateParticipantCount(cleanCode, joinedParty.participants.size)
 
+    // Connect to remote WebSocket relay and join room
+    signalingClient.connect(cleanCode, currentUser.id, currentUser.username)
+    signalingClient.sendJoinRoom(cleanCode, passwordAttempt, currentUser.id, currentUser.username)
+
     voiceRoomManager.joinVoice()
     webRtcManager.joinAsParticipant(cleanCode, party.hostId)
     startPlaybackClock(isHost = false)
@@ -290,6 +413,9 @@ class WatchPartyNetworkEngine(
 
     ActiveRoomSessionManager.updatePlaybackState(party.code, newPlaying, party.positionSec)
     webRtcManager.broadcastPlayPause(newPlaying, party.positionSec)
+    if (party.isHost) {
+      signalingClient.sendSyncPlayback(newPlaying, party.positionSec, party.playbackSpeed)
+    }
     _eventToast.tryEmit(if (newPlaying) "Synchronized: Resumed ▶️" else "Synchronized: Paused ⏸️")
     return true
   }
@@ -303,6 +429,9 @@ class WatchPartyNetworkEngine(
 
     ActiveRoomSessionManager.updatePlaybackState(party.code, party.isPlaying, clamped)
     webRtcManager.broadcastSeek(clamped)
+    if (party.isHost) {
+      signalingClient.sendSyncPlayback(party.isPlaying, clamped, party.playbackSpeed)
+    }
     _eventToast.tryEmit("Seeked to ${formatTime(clamped.toInt())}")
   }
 
@@ -351,24 +480,198 @@ class WatchPartyNetworkEngine(
     }
   }
 
-  fun changeMediaSource(newMedia: LocalMediaItem) {
+  // In-memory lightweight playback position cache for active session media resume
+  private val resumePositions = mutableMapOf<String, Float>()
+
+  fun changeMediaSource(newMedia: LocalMediaItem, queueIndex: Int? = null) {
     val party = _activeParty.value ?: return
     if (!party.isHost) return
+
+    // Save previous media playback position
+    val oldKey = party.activeMedia.uriString.ifBlank { party.activeMedia.title }
+    resumePositions[oldKey] = party.positionSec
+
     localMediaServer.currentMedia = newMedia
-    val streamUrl = localMediaServer.getLanStreamUrl(party.hostId, party.code)
+    val localStreamUrl = localMediaServer.getLanStreamUrl(party.hostId, party.code)
+    val remoteStreamUrl = mediaPublisher.publishMediaForRemoteParticipants(party.code, newMedia, party.hostId)
+    val effectiveStreamUrl = if (remoteStreamUrl.isNotBlank()) remoteStreamUrl else localStreamUrl
+
+    // Restore last position if available
+    val newKey = newMedia.uriString.ifBlank { newMedia.title }
+    val resumePos = resumePositions[newKey] ?: 0f
+
+    // Ensure item is reflected in the playlist
+    val updatedPlaylist = if (party.playlist.none { it.uriString == newMedia.uriString && it.title == newMedia.title }) {
+      party.playlist + newMedia
+    } else {
+      party.playlist
+    }
+    val newQueueIdx = queueIndex ?: updatedPlaylist.indexOfFirst {
+      it.uriString == newMedia.uriString && it.title == newMedia.title
+    }.coerceAtLeast(0)
+
     val updated = party.copy(
       activeMedia = newMedia,
       durationSec = newMedia.durationSec,
-      positionSec = 0f,
+      positionSec = resumePos,
       isPlaying = true,
-      streamUrl = streamUrl
+      streamUrl = effectiveStreamUrl,
+      playlist = updatedPlaylist,
+      currentQueueIndex = newQueueIdx
     )
     _activeParty.value = updated
     registeredParties[party.code] = updated
     webRtcManager.activeMedia = newMedia
-    webRtcManager.broadcastSeek(0f)
-    webRtcManager.broadcastPlayPause(true, 0f)
-    _eventToast.tryEmit("Changed source: ${newMedia.title}")
+    webRtcManager.broadcastSeek(resumePos)
+    webRtcManager.broadcastPlayPause(true, resumePos)
+    signalingClient.sendMediaChanged(newMedia, effectiveStreamUrl, resumePos)
+    _eventToast.tryEmit("Now Playing: ${newMedia.title}")
+  }
+
+  // -------------------------------------------------------------
+  // PLAYLIST / QUEUE MANAGEMENT
+  // -------------------------------------------------------------
+  fun addToQueue(item: LocalMediaItem) {
+    val party = _activeParty.value ?: return
+    if (!party.isHost) return
+    val updatedList = party.playlist + item
+    val updated = party.copy(playlist = updatedList)
+    _activeParty.value = updated
+    registeredParties[party.code] = updated
+    _eventToast.tryEmit("Added to queue: ${item.title}")
+  }
+
+  fun addMultipleToQueue(items: List<LocalMediaItem>) {
+    val party = _activeParty.value ?: return
+    if (!party.isHost) return
+    val updatedList = party.playlist + items
+    val updated = party.copy(playlist = updatedList)
+    _activeParty.value = updated
+    registeredParties[party.code] = updated
+    _eventToast.tryEmit("Added ${items.size} videos to queue")
+  }
+
+  fun removeFromQueue(index: Int) {
+    val party = _activeParty.value ?: return
+    if (!party.isHost || index !in party.playlist.indices) return
+    if (party.playlist.size <= 1) {
+      _eventToast.tryEmit("Cannot remove the only item in playlist")
+      return
+    }
+    val removedItem = party.playlist[index]
+    val updatedList = party.playlist.toMutableList().apply { removeAt(index) }
+    var newIdx = party.currentQueueIndex
+    if (index < party.currentQueueIndex) {
+      newIdx = (newIdx - 1).coerceAtLeast(0)
+    } else if (index == party.currentQueueIndex) {
+      // Removed the currently playing item -> switch to new item at same index or 0
+      newIdx = newIdx.coerceAtMost(updatedList.lastIndex)
+      val nextMedia = updatedList[newIdx]
+      changeMediaSource(nextMedia, newIdx)
+      return
+    }
+    val updated = party.copy(playlist = updatedList, currentQueueIndex = newIdx)
+    _activeParty.value = updated
+    registeredParties[party.code] = updated
+    _eventToast.tryEmit("Removed ${removedItem.title} from queue")
+  }
+
+  fun reorderQueue(fromIndex: Int, toIndex: Int) {
+    val party = _activeParty.value ?: return
+    if (!party.isHost || fromIndex !in party.playlist.indices || toIndex !in party.playlist.indices) return
+    val updatedList = party.playlist.toMutableList()
+    val item = updatedList.removeAt(fromIndex)
+    updatedList.add(toIndex, item)
+
+    val currentPlaying = party.activeMedia
+    val newIdx = updatedList.indexOfFirst {
+      it.uriString == currentPlaying.uriString && it.title == currentPlaying.title
+    }.coerceAtLeast(0)
+
+    val updated = party.copy(playlist = updatedList, currentQueueIndex = newIdx)
+    _activeParty.value = updated
+    registeredParties[party.code] = updated
+  }
+
+  fun playQueueIndex(index: Int) {
+    val party = _activeParty.value ?: return
+    if (!party.isHost || index !in party.playlist.indices) return
+    val targetMedia = party.playlist[index]
+    changeMediaSource(targetMedia, index)
+  }
+
+  fun playNextVideo(): Boolean {
+    val party = _activeParty.value ?: return false
+    if (!party.isHost) return false
+    val nextIdx = party.currentQueueIndex + 1
+    if (nextIdx in party.playlist.indices) {
+      val nextMedia = party.playlist[nextIdx]
+      changeMediaSource(nextMedia, nextIdx)
+      return true
+    } else {
+      _eventToast.tryEmit("End of playlist reached")
+      return false
+    }
+  }
+
+  fun onCurrentVideoEnded() {
+    val party = _activeParty.value ?: return
+    if (!party.isHost) return
+    val nextIdx = party.currentQueueIndex + 1
+    if (nextIdx in party.playlist.indices) {
+      val nextMedia = party.playlist[nextIdx]
+      changeMediaSource(nextMedia, nextIdx)
+      _eventToast.tryEmit("Playing next: ${nextMedia.title}")
+    } else {
+      val updated = party.copy(isPlaying = false, currentQueueIndex = party.playlist.size)
+      _activeParty.value = updated
+      registeredParties[party.code] = updated
+      webRtcManager.broadcastPlayPause(false, party.durationSec.toFloat())
+      _eventToast.tryEmit("Playlist finished 🎉")
+    }
+  }
+
+  // -------------------------------------------------------------
+  // SUBTITLES & SPEED CONTROLS
+  // -------------------------------------------------------------
+  fun setSubtitle(uri: Uri?, displayName: String?) {
+    val party = _activeParty.value ?: return
+    val uriStr = uri?.toString()
+    val updated = party.copy(
+      subtitleUriString = uriStr,
+      subtitleName = displayName,
+      subtitlesEnabled = uriStr != null
+    )
+    _activeParty.value = updated
+    registeredParties[party.code] = updated
+    _eventToast.tryEmit(if (uriStr != null) "Subtitles loaded: $displayName" else "Subtitles disabled")
+  }
+
+  fun toggleSubtitles(enabled: Boolean) {
+    val party = _activeParty.value ?: return
+    val updated = party.copy(subtitlesEnabled = enabled)
+    _activeParty.value = updated
+    registeredParties[party.code] = updated
+    _eventToast.tryEmit(if (enabled) "Subtitles enabled" else "Subtitles disabled")
+  }
+
+  fun setPlaybackSpeed(speed: Float) {
+    val party = _activeParty.value ?: return
+    val updated = party.copy(playbackSpeed = speed)
+    _activeParty.value = updated
+    registeredParties[party.code] = updated
+    if (party.isHost) {
+      signalingClient.sendSyncPlayback(party.isPlaying, party.positionSec, speed)
+    }
+    _eventToast.tryEmit("Playback speed: ${speed}x")
+  }
+
+  fun sendChatMessage(text: String) {
+    signalingClient.sendChatMessage(text)
+  }
+
+  fun sendReactionBurst(emoji: String) {
+    signalingClient.sendReaction(emoji)
   }
 
   // -------------------------------------------------------------
@@ -376,8 +679,8 @@ class WatchPartyNetworkEngine(
   // -------------------------------------------------------------
   fun testNetworkInterruption() {
     val party = _activeParty.value ?: return
+    _activeParty.update { it?.copy(connectionState = PartyConnectionState.RECONNECTING) }
     scope.launch {
-      _activeParty.update { it?.copy(connectionState = PartyConnectionState.RECONNECTING) }
       ActiveRoomSessionManager.sendHeartbeat(
         roomId = party.code,
         hostId = party.hostId,
@@ -424,12 +727,83 @@ class WatchPartyNetworkEngine(
   }
 
   // -------------------------------------------------------------
+  // 12 VOICE SEATS FOR VIDEO ROOM (Owner permanently in Seat 0)
+  // -------------------------------------------------------------
+  fun takeVideoSeat(seatIndex: Int): Boolean {
+    val current = _activeParty.value ?: return false
+    val user = currentUserProvider()
+
+    // OWNER SEAT RULE: Seat 0 is permanently reserved for the owner
+    if (seatIndex == 0) {
+      if (current.hostId != user.id) {
+        _eventToast.tryEmit("Seat 1 is permanently reserved for the room owner.")
+        return false
+      }
+      return true
+    }
+
+    if (seatIndex !in 1..11) return false
+
+    // Owner cannot move or change their seat
+    if (current.hostId == user.id) {
+      _eventToast.tryEmit("The room owner must always occupy the first seat in the Video Room.")
+      return false
+    }
+
+    val currentSeats = current.seats
+    val target = currentSeats.getOrNull(seatIndex) ?: return false
+    if (target.userId != null) {
+      _eventToast.tryEmit("Seat ${seatIndex + 1} is already occupied.")
+      return false
+    }
+
+    val updatedSeats = currentSeats.mapIndexed { idx, s ->
+      if (s.userId == user.id && !s.isOwner) {
+        s.copy(userId = null, username = null, avatar = null, isSpeaking = false)
+      } else if (idx == seatIndex) {
+        s.copy(
+          userId = user.id,
+          username = user.username,
+          avatar = user.avatar,
+          isOwner = false,
+          isAdmin = false,
+          isMuted = voiceRoomManager.isMuted.value
+        )
+      } else s
+    }
+    _activeParty.value = current.copy(seats = updatedSeats)
+    voiceRoomManager.joinVoice()
+    _eventToast.tryEmit("You took Video Seat ${seatIndex + 1} 🎙️")
+    return true
+  }
+
+  fun leaveVideoSeat(): Boolean {
+    val current = _activeParty.value ?: return false
+    val user = currentUserProvider()
+    if (current.hostId == user.id) {
+      _eventToast.tryEmit("The room owner must always occupy the first seat in the Video Room.")
+      return false
+    }
+
+    val updatedSeats = current.seats.map { s ->
+      if (s.userId == user.id && !s.isOwner) {
+        s.copy(userId = null, username = null, avatar = null, isSpeaking = false)
+      } else s
+    }
+    _activeParty.value = current.copy(seats = updatedSeats)
+    _eventToast.tryEmit("Left voice seat.")
+    return true
+  }
+
+  // -------------------------------------------------------------
   // 7. END ROOM / LEAVE ROOM
   // -------------------------------------------------------------
   fun leaveParty() {
     val party = _activeParty.value
     hostHeartbeatJob?.cancel()
     hostHeartbeatJob = null
+    mediaPublisher.cancelPublication()
+    signalingClient.disconnect()
 
     if (party != null && party.isHost) {
       // Host ending room immediately removes it from the active-room registry
@@ -568,6 +942,28 @@ class WatchPartyNetworkEngine(
 
     if (!metaMime.isNullOrBlank()) {
       mime = metaMime
+    }
+
+    // Infer specific container MIME types for ExoPlayer if generic or missing
+    if (mime == "application/octet-stream" || (!mime.startsWith("video/") && !mime.startsWith("audio/"))) {
+      val lower = displayName.lowercase()
+      mime = when {
+        lower.endsWith(".mp4") -> "video/mp4"
+        lower.endsWith(".mkv") -> "video/x-matroska"
+        lower.endsWith(".mov") -> "video/quicktime"
+        lower.endsWith(".webm") -> "video/webm"
+        lower.endsWith(".3gp") -> "video/3gpp"
+        lower.endsWith(".avi") -> "video/x-msvideo"
+        lower.endsWith(".ts") -> "video/mp2t"
+        lower.endsWith(".m4v") -> "video/x-m4v"
+        lower.endsWith(".mp3") -> "audio/mpeg"
+        lower.endsWith(".m4a") -> "audio/mp4"
+        lower.endsWith(".wav") -> "audio/wav"
+        lower.endsWith(".flac") -> "audio/flac"
+        lower.endsWith(".aac") -> "audio/aac"
+        lower.endsWith(".ogg") -> "audio/ogg"
+        else -> mime
+      }
     }
 
     val isAudio = mime.startsWith("audio/") ||
@@ -721,55 +1117,55 @@ class WatchPartyNetworkEngine(
   fun getSampleMediaPresets(): List<LocalMediaItem> {
     return listOf(
       LocalMediaItem(
-        uriString = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
+        uriString = "https://media.w3.org/2010/05/bunny/trailer.mp4",
         title = "Cyberpunk: Edgerunners Ep. 1",
         mimeType = "video/mp4",
-        durationSec = 596,
-        fileSizeBytes = 158008374L,
+        durationSec = 33,
+        fileSizeBytes = 11053871L,
         mediaType = StreamMediaType.VIDEO,
         resolution = "1080p FHD (60fps)",
         codec = "H.264 / AAC 5.1",
         isLocalFile = false
       ),
       LocalMediaItem(
-        uriString = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
+        uriString = "https://media.w3.org/2010/05/sintel/trailer.mp4",
         title = "Interstellar Odyssey (Sci-Fi Epic)",
         mimeType = "video/mp4",
-        durationSec = 734,
-        fileSizeBytes = 168000000L,
-        mediaType = StreamMediaType.VIDEO,
-        resolution = "4K UHD (60fps)",
-        codec = "H.264 / DTS Surround",
-        isLocalFile = false
-      ),
-      LocalMediaItem(
-        uriString = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
-        title = "Synthwave Night Drive & Visuals",
-        mimeType = "video/mp4",
-        durationSec = 653,
-        fileSizeBytes = 84934656L,
-        mediaType = StreamMediaType.VIDEO,
-        resolution = "1080p High Definition",
-        codec = "H.264 / Stereo",
-        isLocalFile = false
-      ),
-      LocalMediaItem(
-        uriString = "https://storage.googleapis.com/exoplayer-test-media-1/mp4/dizzy-short.mp4",
-        title = "Lofi Study Beats & Short Reel",
-        mimeType = "video/mp4",
-        durationSec = 120,
-        fileSizeBytes = 12547737L,
+        durationSec = 52,
+        fileSizeBytes = 4372373L,
         mediaType = StreamMediaType.VIDEO,
         resolution = "720p HD",
+        codec = "H.264 / AAC",
+        isLocalFile = false
+      ),
+      LocalMediaItem(
+        uriString = "https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4",
+        title = "Synthwave Night Drive & Visuals",
+        mimeType = "video/mp4",
+        durationSec = 596,
+        fileSizeBytes = 61878609L,
+        mediaType = StreamMediaType.VIDEO,
+        resolution = "720p Surround",
+        codec = "H.264 / AC3",
+        isLocalFile = false
+      ),
+      LocalMediaItem(
+        uriString = "https://media.w3.org/2010/05/video/movie_300.mp4",
+        title = "Lofi Study Beats & Short Reel",
+        mimeType = "video/mp4",
+        durationSec = 30,
+        fileSizeBytes = 2757913L,
+        mediaType = StreamMediaType.VIDEO,
+        resolution = "480p SD",
         codec = "H.264",
         isLocalFile = false
       ),
       LocalMediaItem(
-        uriString = "https://storage.googleapis.com/exoplayer-test-media-0/play.mp3",
+        uriString = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
         title = "Synthwave Chillout Radio & Beats",
         mimeType = "audio/mpeg",
-        durationSec = 240,
-        fileSizeBytes = 5760000L,
+        durationSec = 372,
+        fileSizeBytes = 8945229L,
         mediaType = StreamMediaType.AUDIO,
         resolution = "320 kbps High Fidelity",
         codec = "MP3 / Stereo",

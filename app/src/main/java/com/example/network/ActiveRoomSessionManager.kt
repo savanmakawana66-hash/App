@@ -131,8 +131,36 @@ object ActiveRoomSessionManager {
   }
 
   /**
+   * Processes a periodic heartbeat from an authorized Admin or Room Manager
+   * to keep permanent rooms online even when the owner is offline.
+   */
+  fun sendAdminHeartbeat(roomId: String, adminId: String) {
+    val existing = sessions[roomId] ?: return
+    val updatedAdmins = if (existing.activeAdminIds.contains(adminId)) existing.activeAdminIds else existing.activeAdminIds + adminId
+    sessions[roomId] = existing.copy(
+      activeAdminIds = updatedAdmins,
+      lastAdminHeartbeatMs = System.currentTimeMillis()
+    )
+    publishActiveRooms()
+  }
+
+  /**
+   * Updates owner online/offline status while maintaining reserved seat state.
+   */
+  fun setOwnerOnlineStatus(roomId: String, isOnline: Boolean) {
+    val existing = sessions[roomId] ?: return
+    sessions[roomId] = existing.copy(
+      isOwnerOnline = isOnline,
+      isHostConnected = isOnline,
+      connectionState = if (isOnline) PartyConnectionState.CONNECTED else PartyConnectionState.RECONNECTING
+    )
+    publishActiveRooms()
+  }
+
+  /**
    * Validates if a user can join a room.
    * Rejects expired, closed, or offline rooms.
+   * Permanent rooms with active admins remain joinable when the owner is offline.
    */
   fun validateJoin(roomId: String, passwordAttempt: String = ""): Result<ActiveRoomSession> {
     val session = getActiveSession(roomId)
@@ -145,11 +173,16 @@ object ActiveRoomSessionManager {
     if (session.isExpired) {
       sessions.remove(roomId)
       publishActiveRooms()
-      return Result.failure(IllegalStateException("This room session has expired due to host inactivity."))
+      return Result.failure(IllegalStateException("This room session has expired due to inactivity."))
     }
 
     if (!session.isHostConnected) {
-      return Result.failure(IllegalStateException("The room host is currently disconnected."))
+      val isAdminMaintaining = session.isPermanentRoom &&
+        session.activeAdminIds.isNotEmpty() &&
+        (System.currentTimeMillis() - session.lastAdminHeartbeatMs <= 18000L)
+      if (!isAdminMaintaining) {
+        return Result.failure(IllegalStateException("The room host is currently disconnected."))
+      }
     }
 
     if (session.isPrivate && session.password.isNotBlank() && session.password != passwordAttempt) {

@@ -282,7 +282,13 @@ fun HostWatchPartyDialog(
               ) {
                 // Pick Video
                 Button(
-                  onClick = { filePickerLauncher.launch(arrayOf("video/*")) },
+                  onClick = {
+                    try {
+                      filePickerLauncher.launch(arrayOf("video/*", "video/mp4", "video/x-matroska", "video/webm", "video/quicktime", "video/3gpp"))
+                    } catch (_: Exception) {
+                      filePickerLauncher.launch(arrayOf("*/*"))
+                    }
+                  },
                   colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceElevated),
                   border = BorderStroke(1.dp, IndigoPrimary.copy(alpha = 0.5f)),
                   shape = RoundedCornerShape(10.dp),

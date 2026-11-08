@@ -26,16 +26,27 @@ data class ActiveRoomSession(
   val createdAtMs: Long = System.currentTimeMillis(),
   val lastHeartbeatMs: Long = System.currentTimeMillis(),
   val isClosed: Boolean = false,
-  val streamUrl: String = ""
+  val streamUrl: String = "",
+  val isPermanentRoom: Boolean = true,
+  val isOwnerOnline: Boolean = true,
+  val activeAdminIds: List<String> = emptyList(),
+  val lastAdminHeartbeatMs: Long = 0L
 ) {
   /**
    * Heartbeat timeout threshold:
    * - Host sends a heartbeat every 3-5 seconds.
    * - If no heartbeat is received within 8 seconds, the host is marked as reconnecting.
-   * - If no heartbeat is received within 18 seconds, the session is expired and removed.
+   * - If no heartbeat is received within 18 seconds, the session is expired UNLESS it is a
+   *   Permanent Room actively maintained by an authorized admin.
    */
   val isExpired: Boolean
-    get() = isClosed || (System.currentTimeMillis() - lastHeartbeatMs > 18000L)
+    get() {
+      if (isClosed) return true
+      val now = System.currentTimeMillis()
+      val hostAlive = (now - lastHeartbeatMs <= 18000L)
+      val adminAlive = isPermanentRoom && activeAdminIds.isNotEmpty() && (now - lastAdminHeartbeatMs <= 18000L)
+      return !hostAlive && !adminAlive
+    }
 
   val isReconnecting: Boolean
     get() = !isClosed && (connectionState == PartyConnectionState.RECONNECTING ||

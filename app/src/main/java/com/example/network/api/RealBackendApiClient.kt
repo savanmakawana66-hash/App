@@ -36,19 +36,20 @@ class RealBackendApiClient(
   private val TAG = "BackendApiClient"
 
   // Production backend endpoint
-  var baseUrl: String = "https://ais-dev-c555ii3jx626zxd5sixz54-555154314704.asia-southeast1.run.app"
+  var baseUrl: String = BackendServerConfig.activeBaseUrl
     set(value) {
-      if (!value.startsWith("https://", ignoreCase = true) && !value.startsWith("http://10.0.2.2") && !value.startsWith("http://localhost")) {
+      if (!value.startsWith("https://", ignoreCase = true) && !value.startsWith("http://10.0.2.2") && !value.startsWith("http://localhost") && !value.startsWith("http://127.0.0.1")) {
         throw SecurityException("Insecure HTTP connection rejected. Production APIs must use HTTPS.")
       }
       field = value.trimEnd('/')
+      BackendServerConfig.setBaseUrl(field)
     }
 
   private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-  // Modern TLS specifications
+  // Modern TLS specifications with local cleartext fallback
   private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
-    .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS, ConnectionSpec.RESTRICTED_TLS))
+    .connectionSpecs(listOf(ConnectionSpec.MODERN_TLS, ConnectionSpec.RESTRICTED_TLS, ConnectionSpec.CLEARTEXT))
     .connectTimeout(15, TimeUnit.SECONDS)
     .readTimeout(25, TimeUnit.SECONDS)
     .writeTimeout(25, TimeUnit.SECONDS)
@@ -177,8 +178,76 @@ class RealBackendApiClient(
         rooms
       }
     } catch (e: Exception) {
-      // If remote backend offline, return empty list (never fake mock data)
+      Result.failure(e)
+    }
+  }
+
+  suspend fun checkBackendHealth(): Result<Boolean> = withContext(Dispatchers.IO) {
+    try {
+      val request = Request.Builder()
+        .url(BackendServerConfig.getHealthUrl())
+        .get()
+        .build()
+      executeSafeRequest(request) { resp, _ -> resp.isSuccessful }
+    } catch (e: Exception) {
+      Result.failure(e)
+    }
+  }
+
+  suspend fun fetchActiveWatchParties(): Result<List<ActiveRoomSession>> = withContext(Dispatchers.IO) {
+    try {
+      val request = Request.Builder()
+        .url(BackendServerConfig.getActiveRoomsUrl())
+        .get()
+        .build()
+
+      executeSafeRequest(request) { _, body ->
+        val jsonArray = JSONArray(body)
+        val sessions = mutableListOf<ActiveRoomSession>()
+        for (i in 0 until jsonArray.length()) {
+          val obj = jsonArray.getJSONObject(i)
+          sessions.add(
+            ActiveRoomSession(
+              roomId = obj.getString("id"),
+              name = obj.getString("name"),
+              hostId = obj.getString("ownerId"),
+              hostName = obj.optString("ownerName", "Host"),
+              isHostConnected = true,
+              connectionState = PartyConnectionState.CONNECTED,
+              participantCount = obj.optInt("participantCount", 1),
+              isPlaying = obj.optBoolean("isPlaying", true),
+              currentPositionSec = obj.optDouble("positionSec", 0.0).toFloat(),
+              durationSec = obj.optInt("durationSec", 1800),
+              mediaTitle = obj.optString("mediaTitle", "Video"),
+              mediaType = StreamMediaType.VIDEO,
+              currentQuality = StreamQuality.HIGH_ORIGINAL,
+              isPrivate = obj.optBoolean("isPrivate", false),
+              createdAtMs = obj.optLong("createdAtMs", System.currentTimeMillis()),
+              lastHeartbeatMs = System.currentTimeMillis(),
+              isClosed = false,
+              streamUrl = obj.optString("streamUrl", "")
+            )
+          )
+        }
+        sessions
+      }
+    } catch (e: Exception) {
       Result.success(emptyList())
+    }
+  }
+
+  suspend fun fetchRoomDetails(roomCode: String): Result<JSONObject> = withContext(Dispatchers.IO) {
+    try {
+      val request = Request.Builder()
+        .url(BackendServerConfig.getRoomDetailsUrl(roomCode))
+        .get()
+        .build()
+
+      executeSafeRequest(request) { _, body ->
+        JSONObject(body)
+      }
+    } catch (e: Exception) {
+      Result.failure(e)
     }
   }
 

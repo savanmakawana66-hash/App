@@ -143,7 +143,11 @@ data class Room(
   val videoVolume: Float = 1.0f,
   val isVideoMuted: Boolean = false,
   val micVolume: Float = 1.0f,
-  val videoQuality: String = "HIGH"
+  val videoQuality: String = "HIGH",
+  val roomType: RoomType = RoomType.NORMAL,
+  val partnerSeatsEnabled: Boolean = true,
+  val isOwnerOnline: Boolean = true,
+  val isPermanentRoom: Boolean = true
 )
 
 data class RoomSeat(
@@ -155,7 +159,10 @@ data class RoomSeat(
   val isSpeaking: Boolean = false,
   val isOwner: Boolean = false,
   val isAdmin: Boolean = false,
-  val raisedHand: Boolean = false
+  val raisedHand: Boolean = false,
+  val isPartnerSeat: Boolean = false,
+  val isOwnerOffline: Boolean = false,
+  val partnerLabel: String? = null
 )
 
 data class AudienceMember(
