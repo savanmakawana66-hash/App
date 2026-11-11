@@ -14,8 +14,9 @@ import kotlinx.coroutines.launch
 
 enum class BottomNavTab {
   ROOM,
-  DM,
   GAMES,
+  STORE,
+  DM,
   PROFILE
 }
 
@@ -563,6 +564,25 @@ class MainViewModel @JvmOverloads constructor(
       repository.postEventMessage("Opponent matched! Game started.")
     }
   }
+
+  fun startBotGame(gameType: GameType) {
+    val user = currentUser.value
+    _isMatchmaking.value = false
+    val session = ActiveGameSessionManager.startBotGame(
+      userId = user.id,
+      username = user.username,
+      avatar = user.avatar,
+      gameType = gameType
+    )
+    _activeGameSessionId.value = session.matchId
+    repository.postEventMessage("Started ${gameType.displayName} match vs 🤖 BOT [AI]!")
+  }
+
+  fun purchaseCoinPackage(packageId: String): Boolean = repository.purchaseCoinPackage(packageId)
+  fun equipRing(ringId: String?) = repository.equipRing(ringId)
+  fun equipNameTag(tagLabel: String?) = repository.equipNameTag(tagLabel)
+  fun equipProfileFrame(frameName: String) = repository.equipProfileFrame(frameName)
+  fun equipCharmBadge(badge: String?) = repository.equipCharmBadge(badge)
 
   fun cancelMatchmaking() {
     ActiveGameSessionManager.cancelMatchmaking(currentUser.value.id)

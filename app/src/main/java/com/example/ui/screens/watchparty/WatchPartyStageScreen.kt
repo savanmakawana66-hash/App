@@ -735,15 +735,37 @@ fun WatchPartyStageScreen(
               }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.SpaceBetween,
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Text(
+                text = "🎙️ Voice Stage (12 Seats)",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+              )
+              Text(
+                text = "Seat 1: Reserved for Host 👑",
+                fontSize = 10.sp,
+                color = AmberXp
+              )
+            }
 
-            // Row of Participant Avatars with Speaking Pulse
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Row of 12 Voice Seats with Host Seat 0 reservation
             LazyRow(
-              horizontalArrangement = Arrangement.spacedBy(12.dp),
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
               modifier = Modifier.fillMaxWidth()
             ) {
-              items(party.participants) { p ->
-                ParticipantAvatarPill(participant = p)
+              itemsIndexed(party.seats) { idx, seat ->
+                VideoSeatItem(
+                  seat = seat,
+                  onTakeSeat = { engine.takeVideoSeat(idx) },
+                  onLeaveSeat = { engine.leaveVideoSeat() }
+                )
               }
             }
           }
@@ -979,6 +1001,71 @@ fun ParticipantAvatarPill(participant: WatchPartyParticipant) {
   }
 }
 
+@Composable
+fun VideoSeatItem(
+  seat: RoomSeat,
+  onTakeSeat: () -> Unit,
+  onLeaveSeat: () -> Unit
+) {
+  Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
+    modifier = Modifier.width(54.dp)
+  ) {
+    if (seat.userId != null) {
+      Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+          .size(44.dp)
+          .clip(CircleShape)
+          .background(
+            if (seat.isSpeaking) EmeraldOnline.copy(alpha = 0.3f)
+            else if (seat.isOwner) AmberXp.copy(alpha = 0.2f)
+            else IndigoPrimary.copy(alpha = 0.2f)
+          )
+          .border(
+            width = if (seat.isSpeaking) 2.dp else if (seat.isOwner) 1.5.dp else 1.dp,
+            color = if (seat.isSpeaking) EmeraldOnline else if (seat.isOwner) AmberXp else DarkSurfaceBorder,
+            shape = CircleShape
+          )
+      ) {
+        Text(
+          text = if (seat.isOwner) "👑" else seat.username?.take(1)?.uppercase() ?: "👤",
+          fontSize = 15.sp,
+          fontWeight = FontWeight.Bold,
+          color = Color.White
+        )
+      }
+      Spacer(modifier = Modifier.height(2.dp))
+      Text(
+        text = if (seat.isOwner) "Host 👑" else (seat.username ?: "User"),
+        fontSize = 10.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = if (seat.isOwner) AmberXp else Color.White,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis
+      )
+    } else {
+      Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+          .size(44.dp)
+          .clip(CircleShape)
+          .background(DarkSurfaceElevated)
+          .border(1.dp, DarkSurfaceBorder, CircleShape)
+          .clickable { onTakeSeat() }
+      ) {
+        Icon(Icons.Default.Add, contentDescription = "Take Seat", tint = IndigoLight, modifier = Modifier.size(16.dp))
+      }
+      Spacer(modifier = Modifier.height(2.dp))
+      Text(
+        text = "Seat ${seat.seatIndex + 1}",
+        fontSize = 10.sp,
+        color = TextSecondary
+      )
+    }
+  }
+}
+
 // -------------------------------------------------------------
 // AUDIO TRACK DATA HELPER
 // -------------------------------------------------------------
@@ -1058,10 +1145,17 @@ fun VideoPlayerStage(
   // Build ExoPlayer instance with standard browser User-Agent and redirect handling to prevent CDN 403s
   val exoPlayer = remember(context) {
     val httpDataSourceFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
-      .setUserAgent("Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 ExoPlayer/2.19.1")
+      .setUserAgent("Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36")
       .setAllowCrossProtocolRedirects(true)
       .setConnectTimeoutMs(15000)
       .setReadTimeoutMs(30000)
+      .setDefaultRequestProperties(
+        mapOf(
+          "Accept" to "*/*",
+          "Accept-Encoding" to "identity",
+          "Connection" to "keep-alive"
+        )
+      )
 
     val dataSourceFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpDataSourceFactory)
 
@@ -1128,10 +1222,30 @@ fun VideoPlayerStage(
       }
 
       override fun onPlayerError(error: PlaybackException) {
-        // Log technical detail to Logcat only
-        Log.e("VideoPlayerStage", "ExoPlayer playback error [${error.errorCodeName}]: ${error.message}", error)
+        val httpError = error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException
+        val is403 = httpError?.responseCode == 403 || error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+        Log.e("VideoPlayerStage", "ExoPlayer playback error [${error.errorCodeName}] (HTTP 403=$is403): ${error.message}", error)
+
+        // If host has direct local content/file URI, fallback directly to it
+        val effectiveUri = media.getEffectiveUri()
+        if (party.isHost && effectiveUri != null && effectiveUri != streamUri &&
+          (media.isSafSelected || media.isLocalFile || effectiveUri.scheme == "content" || effectiveUri.scheme == "file")
+        ) {
+          Log.i("VideoPlayerStage", "Stream URL error; falling back to direct local URI: $effectiveUri")
+          try {
+            val fallbackItem = MediaItem.Builder().setUri(effectiveUri).build()
+            exoPlayer.setMediaItem(fallbackItem)
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = party.isPlaying
+            playbackError = null
+            return
+          } catch (e: Exception) {
+            Log.e("VideoPlayerStage", "Fallback to local URI failed", e)
+          }
+        }
+
         // Clean user-friendly message without raw error codes
-        playbackError = "Couldn't play this video"
+        playbackError = if (is403) "Stream access restricted (HTTP 403)" else "Couldn't play this video"
         isBuffering = false
       }
     }
@@ -1344,6 +1458,21 @@ fun VideoPlayerStage(
               fontSize = 12.sp,
               fontWeight = FontWeight.Bold
             )
+          }
+          if (party.isHost) {
+            Spacer(modifier = Modifier.width(4.dp))
+            TextButton(
+              onClick = onOpenQueue,
+              contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+              modifier = Modifier.height(28.dp).testTag("player_change_video_button")
+            ) {
+              Text(
+                text = "Change",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+              )
+            }
           }
         }
       }

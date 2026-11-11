@@ -30,6 +30,7 @@ fun GamesHomeScreen(
   currentUser: User,
   onPlayRandom: (GameType) -> Unit,
   onPlayWithFriend: (GameType) -> Unit,
+  onPlayVsBot: (GameType) -> Unit = {},
   onJoinByCode: () -> Unit
 ) {
   LazyColumn(
@@ -148,6 +149,7 @@ fun GamesHomeScreen(
         playerCountTag = "👥 2 Players",
         onPlayFriend = { onPlayWithFriend(GameType.CHESS) },
         onPlayRandom = { onPlayRandom(GameType.CHESS) },
+        onPlayVsBot = { onPlayVsBot(GameType.CHESS) },
         testTagPrefix = "chess"
       )
     }
@@ -165,6 +167,7 @@ fun GamesHomeScreen(
         playerCountTag = "👥 2-4 Players",
         onPlayFriend = { onPlayWithFriend(GameType.LUDO) },
         onPlayRandom = { onPlayRandom(GameType.LUDO) },
+        onPlayVsBot = { onPlayVsBot(GameType.LUDO) },
         testTagPrefix = "ludo"
       )
     }
@@ -223,6 +226,7 @@ private fun GameCard(
   playerCountTag: String,
   onPlayFriend: () -> Unit,
   onPlayRandom: () -> Unit,
+  onPlayVsBot: () -> Unit = {},
   testTagPrefix: String
 ) {
   Card(
@@ -313,7 +317,7 @@ private fun GameCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
               Icon(Icons.Default.Group, contentDescription = "Friend", modifier = Modifier.size(15.dp), tint = CyanAccent)
               Spacer(modifier = Modifier.width(6.dp))
-              Text("Play with Friend", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
+              Text("Friend", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.SemiBold)
             }
           }
 
@@ -331,8 +335,29 @@ private fun GameCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
               Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(16.dp))
               Spacer(modifier = Modifier.width(4.dp))
-              Text("Play Now", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+              Text("Quick Match", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
             }
+          }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Play vs Bot (AI)
+        Box(
+          contentAlignment = Alignment.Center,
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x22F59E0B))
+            .border(1.dp, GoldAccent.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+            .clickable { onPlayVsBot() }
+            .padding(vertical = 10.dp)
+            .testTag("btn_${testTagPrefix}_vs_bot")
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("🤖", fontSize = 15.sp)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Play vs Bot [AI]", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = GoldAccent)
           }
         }
       }

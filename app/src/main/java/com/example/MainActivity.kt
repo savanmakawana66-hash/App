@@ -4,6 +4,7 @@ import android.Manifest
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -42,6 +43,7 @@ import com.example.ui.screens.room.RoomDetailScreen
 import com.example.ui.screens.room.RoomListScreen
 import com.example.ui.screens.settings.GlobalAdminScreen
 import com.example.ui.screens.settings.SettingsScreen
+import com.example.ui.screens.store.StoreScreen
 import com.example.ui.screens.watchparty.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.BottomNavTab
@@ -169,6 +171,7 @@ fun WatchTogetherApp(
     when {
       // 0. Active Real-Time Game Session (Chess or Ludo)
       activeGameSession != null -> {
+        BackHandler { viewModel.leaveActiveGame() }
         when (activeGameSession!!.gameType) {
           GameType.CHESS -> {
             ChessGameScreen(
@@ -197,6 +200,7 @@ fun WatchTogetherApp(
 
       // 1. Active Watch Party & Voice Room (Local Media Streaming to Remote Friends)
       activeWatchParty != null -> {
+        BackHandler { viewModel.leaveWatchParty() }
         WatchPartyStageScreen(
           engine = viewModel.networkEngine,
           party = activeWatchParty!!,
@@ -208,6 +212,7 @@ fun WatchTogetherApp(
 
       // 1. In-Room View (Synchronized 8-Seat Watch Party Room)
       currentActiveRoom != null -> {
+        BackHandler { viewModel.leaveRoom() }
         RoomDetailScreen(
           room = currentActiveRoom!!,
           currentUser = currentUser,
@@ -252,12 +257,18 @@ fun WatchTogetherApp(
           onAddAdmin = { userId, username -> viewModel.addRoomAdmin(currentActiveRoom!!.id, userId, username) },
           onRemoveAdmin = { userId -> viewModel.removeRoomAdmin(currentActiveRoom!!.id, userId) },
           onDeleteRoom = { viewModel.deleteRoom(currentActiveRoom!!.id) },
-          onTogglePartnerSeats = { enabled -> viewModel.togglePartnerSeats(currentActiveRoom!!.id, enabled) }
+          onTogglePartnerSeats = { enabled -> viewModel.togglePartnerSeats(currentActiveRoom!!.id, enabled) },
+          availableRooms = filteredRooms,
+          onSwitchRoom = { targetRoomId ->
+            viewModel.leaveRoom()
+            viewModel.joinRoom(targetRoomId)
+          }
         )
       }
 
       // 2. Global Super-Admin Console
       showGlobalAdminPanel -> {
+        BackHandler { viewModel.closeGlobalAdminPanel() }
         GlobalAdminScreen(
           reports = reports,
           onClose = { viewModel.closeGlobalAdminPanel() },
@@ -269,6 +280,7 @@ fun WatchTogetherApp(
 
       // 3. App Settings Screen
       showSettingsScreen -> {
+        BackHandler { viewModel.closeSettings() }
         SettingsScreen(
           currentUser = currentUser,
           settings = appSettings,
@@ -282,6 +294,7 @@ fun WatchTogetherApp(
 
       // 4. In-App Notifications Sheet
       showNotificationsSheet -> {
+        BackHandler { viewModel.closeNotifications() }
         NotificationsSheet(
           notifications = notifications,
           onDismiss = { viewModel.closeNotifications() },
@@ -318,16 +331,34 @@ fun WatchTogetherApp(
                 horizontalArrangement = Arrangement.SpaceAround,
                 verticalAlignment = Alignment.CenterVertically
               ) {
-                // 1. HOME
+                // 1. ROOM
                 PremiumBottomNavItem(
                   selected = currentTab == BottomNavTab.ROOM,
                   onClick = { viewModel.selectTab(BottomNavTab.ROOM) },
                   icon = if (currentTab == BottomNavTab.ROOM) Icons.Default.MeetingRoom else Icons.Outlined.MeetingRoom,
-                  label = "HOME",
+                  label = "ROOM",
                   testTag = "tab_room"
                 )
 
-                // 2. DM
+                // 2. GAMES
+                PremiumBottomNavItem(
+                  selected = currentTab == BottomNavTab.GAMES,
+                  onClick = { viewModel.selectTab(BottomNavTab.GAMES) },
+                  icon = if (currentTab == BottomNavTab.GAMES) Icons.Default.SportsEsports else Icons.Outlined.SportsEsports,
+                  label = "GAMES",
+                  testTag = "tab_games"
+                )
+
+                // 3. STORE
+                PremiumBottomNavItem(
+                  selected = currentTab == BottomNavTab.STORE,
+                  onClick = { viewModel.selectTab(BottomNavTab.STORE) },
+                  icon = if (currentTab == BottomNavTab.STORE) Icons.Default.Storefront else Icons.Outlined.Storefront,
+                  label = "STORE",
+                  testTag = "tab_store"
+                )
+
+                // 4. DM
                 val hasPending = friends.any { it.friendshipStatus == com.example.data.model.FriendshipStatus.PENDING }
                 PremiumBottomNavItem(
                   selected = currentTab == BottomNavTab.DM,
@@ -338,16 +369,7 @@ fun WatchTogetherApp(
                   badgeCount = if (hasPending) 1 else 0
                 )
 
-                // 3. GAMES
-                PremiumBottomNavItem(
-                  selected = currentTab == BottomNavTab.GAMES,
-                  onClick = { viewModel.selectTab(BottomNavTab.GAMES) },
-                  icon = if (currentTab == BottomNavTab.GAMES) Icons.Default.SportsEsports else Icons.Outlined.SportsEsports,
-                  label = "GAMES",
-                  testTag = "tab_games"
-                )
-
-                // 4. PROFILE
+                // 5. PROFILE
                 PremiumBottomNavItem(
                   selected = currentTab == BottomNavTab.PROFILE,
                   onClick = { viewModel.selectTab(BottomNavTab.PROFILE) },
@@ -359,6 +381,9 @@ fun WatchTogetherApp(
             }
           }
         ) { paddingValues ->
+          if (currentTab != BottomNavTab.ROOM) {
+            BackHandler { viewModel.selectTab(BottomNavTab.ROOM) }
+          }
           Box(
             modifier = Modifier
               .fillMaxSize()
@@ -388,6 +413,28 @@ fun WatchTogetherApp(
                 )
               }
 
+              BottomNavTab.GAMES -> {
+                GamesHomeScreen(
+                  currentUser = currentUser,
+                  onPlayRandom = { gType -> viewModel.startMatchmaking(gType) },
+                  onPlayWithFriend = { gType -> viewModel.openPlayWithFriend(gType) },
+                  onPlayVsBot = { gType -> viewModel.startBotGame(gType) },
+                  onJoinByCode = { viewModel.openJoinGameCode() }
+                )
+              }
+
+              BottomNavTab.STORE -> {
+                StoreScreen(
+                  currentUser = currentUser,
+                  onPurchaseCoinPackage = { pkgId -> viewModel.purchaseCoinPackage(pkgId) },
+                  onOpenMysteryBox = { viewModel.openMysteryBox() },
+                  onEquipRing = { ringId -> viewModel.equipRing(ringId) },
+                  onEquipNameTag = { tag -> viewModel.equipNameTag(tag) },
+                  onEquipProfileFrame = { frame -> viewModel.equipProfileFrame(frame) },
+                  onEquipCharmBadge = { badge -> viewModel.equipCharmBadge(badge) }
+                )
+              }
+
               BottomNavTab.DM -> {
                 DmScreen(
                   currentUser = currentUser,
@@ -409,15 +456,6 @@ fun WatchTogetherApp(
                   onChallengeGame = { friend, gType -> viewModel.challengeFriendToGame(friend, gType) },
                   onAcceptGameInvite = { inviteId -> viewModel.acceptGameInvite(inviteId) },
                   pendingGameInvites = pendingGameInvites
-                )
-              }
-
-              BottomNavTab.GAMES -> {
-                GamesHomeScreen(
-                  currentUser = currentUser,
-                  onPlayRandom = { gType -> viewModel.startMatchmaking(gType) },
-                  onPlayWithFriend = { gType -> viewModel.openPlayWithFriend(gType) },
-                  onJoinByCode = { viewModel.openJoinGameCode() }
                 )
               }
 

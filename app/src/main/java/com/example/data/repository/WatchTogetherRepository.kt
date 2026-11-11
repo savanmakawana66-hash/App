@@ -514,6 +514,18 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
     _currentActiveRoom.value = targetRoom
     _currentUser.update { it.copy(currentRoomId = targetRoom.id) }
 
+    // If owner of permanent room rejoins, restore online state authoritatively
+    if (targetRoom.isPermanentRoom && targetRoom.ownerId == _currentUser.value.id) {
+      setOwnerOnline(targetRoom.id, true)
+      com.example.network.ActiveRoomSessionManager.setOwnerOnlineStatus(targetRoom.id, true)
+    } else if (targetRoom.isPermanentRoom) {
+      // If admin rejoins, keep session alive
+      val admins = _roomAdmins.value[targetRoom.id] ?: emptyList()
+      if (admins.any { it.userId == _currentUser.value.id }) {
+        com.example.network.ActiveRoomSessionManager.sendAdminHeartbeat(targetRoom.id, _currentUser.value.id)
+      }
+    }
+
     // Populate initial seats
     val admins = _roomAdmins.value[targetRoom.id] ?: emptyList()
     val isUserOwner = targetRoom.ownerId == _currentUser.value.id
@@ -536,7 +548,14 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
         )
       )
       for (i in 1..7) {
-        initialSeats.add(RoomSeat(seatIndex = i))
+        val isPartner = i >= 6
+        initialSeats.add(
+          RoomSeat(
+            seatIndex = i,
+            isPartnerSeat = isPartner,
+            partnerLabel = if (isPartner) "Partner ${i - 5}" else null
+          )
+        )
       }
     } else {
       // Owner is in Seat 0 (permanently reserved; displays dimmed if owner is offline)
@@ -562,12 +581,16 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
         )
       )
       for (i in 2..7) {
-        initialSeats.add(RoomSeat(seatIndex = i))
+        val isPartner = i >= 6
+        initialSeats.add(
+          RoomSeat(
+            seatIndex = i,
+            isPartnerSeat = isPartner,
+            partnerLabel = if (isPartner) "Partner ${i - 5}" else null
+          )
+        )
       }
     }
-    // Add 2 special Partner Seats (indices 8 and 9)
-    initialSeats.add(RoomSeat(seatIndex = 8, isPartnerSeat = true, partnerLabel = "Partner 1"))
-    initialSeats.add(RoomSeat(seatIndex = 9, isPartnerSeat = true, partnerLabel = "Partner 2"))
     _roomSeats.value = initialSeats
 
     // Check if current user is in a seat or audience
@@ -615,17 +638,31 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
   fun leaveRoom() {
     _currentActiveRoom.value?.let { room ->
       if (room.ownerId == _currentUser.value.id) {
-        // Host leaving closes the session
-        com.example.network.ActiveRoomSessionManager.closeSession(room.id)
+        if (room.isPermanentRoom) {
+          // Permanent room must NOT close when owner leaves!
+          // Mark owner as offline and keep session alive for admins and members
+          setOwnerOnline(room.id, false)
+          com.example.network.ActiveRoomSessionManager.setOwnerOnlineStatus(room.id, false)
+          val remaining = (_roomSeats.value.count { it.userId != null } + _audienceMembers.value.size - 1).coerceAtLeast(0)
+          com.example.network.ActiveRoomSessionManager.updateParticipantCount(room.id, remaining)
+        } else {
+          // Normal non-permanent room: Host leaving closes the session
+          com.example.network.ActiveRoomSessionManager.closeSession(room.id)
+        }
       } else {
         val remaining = (_roomSeats.value.count { it.userId != null } + _audienceMembers.value.size - 1).coerceAtLeast(1)
         com.example.network.ActiveRoomSessionManager.updateParticipantCount(room.id, remaining)
       }
-      // Remove from seat
+      // Remove from seat (for permanent room owner, keep Seat 0 reserved as offline owner seat)
       _roomSeats.update { seats ->
         seats.map {
-          if (it.userId == _currentUser.value.id) it.copy(userId = null, username = null, avatar = null, isSpeaking = false)
-          else it
+          if (it.userId == _currentUser.value.id) {
+            if (it.isOwner && room.isPermanentRoom) {
+              it.copy(isOwnerOffline = true, isSpeaking = false)
+            } else {
+              it.copy(userId = null, username = null, avatar = null, isSpeaking = false)
+            }
+          } else it
         }
       }
       // Remove from audience
@@ -718,8 +755,8 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
         if (it.userId == _currentUser.value.id) {
           removed = true
           if (it.isOwner) {
-            // Keep reserved state for owner
-            it.copy(isSpeaking = false, isMuted = true, isOwnerOffline = true)
+            // Owner moving to audience: vacate seat 0, keep owner reserve flag
+            it.copy(userId = null, username = null, avatar = null, isSpeaking = false, isMuted = false, isOwnerOffline = true)
           } else {
             it.copy(userId = null, username = null, avatar = null, isSpeaking = false, isMuted = false)
           }
@@ -1000,6 +1037,14 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
   ): Room? {
     val user = _currentUser.value
 
+    // If owner already owns a permanent room, re-enter it without deducting coins or creating duplicate
+    val existingOwnedRoom = _rooms.value.find { it.ownerId == user.id && it.isPermanentRoom }
+    if (existingOwnedRoom != null) {
+      _eventMessages.tryEmit("Re-entering your existing Permanent Room '${existingOwnedRoom.name}'...")
+      joinRoom(existingOwnedRoom.id)
+      return existingOwnedRoom
+    }
+
     // Server-Authoritative Coin validation: Permanent Room costs exactly 2,000 Coins
     if (!com.example.network.security.ServerCoinManager.canAffordPermanentRoom(user.id)) {
       val balance = com.example.network.security.ServerCoinManager.getBalance(user.id)
@@ -1034,6 +1079,8 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
       description = sanitizedDesc,
       ownerId = user.id, // Permanent Owner
       ownerName = user.username,
+      isPermanentRoom = true,
+      isOwnerOnline = true,
       isPrivate = isPrivate,
       password = password,
       welcomeMessage = sanitizedWelcome.ifBlank { "Welcome to $sanitizedName! Enjoy synchronized watch parties." },
@@ -1488,6 +1535,54 @@ class WatchTogetherRepository(context: android.content.Context? = null) {
     refreshCoinWallet()
     _eventMessages.tryEmit("Purchased $avatarName (${validity.days} days validity)! 🖼️")
     return true
+  }
+
+  fun purchaseCoinPackage(packageId: String): Boolean {
+    val user = _currentUser.value
+    val order = com.example.network.security.ServerCoinManager.createPaymentOrder(user.id, packageId)
+    val res = com.example.network.security.ServerCoinManager.processPaymentOrder(
+      orderId = order.orderId,
+      paymentId = order.paymentId,
+      status = PaymentStatus.SUCCESS,
+      receiptNumber = order.receiptNumber
+    )
+    if (res.isFailure) {
+      _eventMessages.tryEmit("Payment failed: ${res.exceptionOrNull()?.message}")
+      return false
+    }
+    refreshCoinWallet()
+    _eventMessages.tryEmit("Successfully credited +${order.coins} Coins! 🪙 Receipt: ${order.receiptNumber}")
+    return true
+  }
+
+  fun equipRing(ringId: String?) {
+    _currentUser.update { user ->
+      val updatedUnlocked = if (ringId != null && !user.unlockedRings.contains(ringId)) {
+        user.unlockedRings + ringId
+      } else user.unlockedRings
+      user.copy(equippedRingId = ringId, unlockedRings = updatedUnlocked)
+    }
+    _eventMessages.tryEmit(if (ringId != null) "Equipped Couple Ring 💍" else "Unequipped Ring")
+  }
+
+  fun equipNameTag(tagLabel: String?) {
+    _currentUser.update { user ->
+      val updatedUnlocked = if (tagLabel != null && !user.unlockedNameTags.contains(tagLabel)) {
+        user.unlockedNameTags + tagLabel
+      } else user.unlockedNameTags
+      user.copy(equippedNameTag = tagLabel, unlockedNameTags = updatedUnlocked)
+    }
+    _eventMessages.tryEmit(if (tagLabel != null) "Equipped Name Tag: $tagLabel ✨" else "Unequipped Name Tag")
+  }
+
+  fun equipProfileFrame(frameName: String) {
+    _currentUser.update { it.copy(profileFrame = frameName) }
+    _eventMessages.tryEmit("Equipped Profile Frame: $frameName 🖼️")
+  }
+
+  fun equipCharmBadge(badge: String?) {
+    _currentUser.update { it.copy(equippedCharmBadge = badge) }
+    _eventMessages.tryEmit(if (badge != null) "Equipped Charm Badge $badge" else "Unequipped Charm Badge")
   }
 
   fun setRoomGame(roomId: String, gameType: String?, isEnabled: Boolean) {

@@ -25,8 +25,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -93,7 +96,9 @@ fun RoomDetailScreen(
   onAddAdmin: (userId: String, username: String) -> Unit = { _, _ -> },
   onRemoveAdmin: (userId: String) -> Unit = {},
   onDeleteRoom: () -> Unit = {},
-  onTogglePartnerSeats: (Boolean) -> Unit = {}
+  onTogglePartnerSeats: (enabled: Boolean) -> Unit = {},
+  availableRooms: List<Room> = emptyList(),
+  onSwitchRoom: (roomId: String) -> Unit = {}
 ) {
   val context = LocalContext.current
   val isOwner = room.ownerId == currentUser.id
@@ -108,13 +113,37 @@ fun RoomDetailScreen(
   var showThemeEditorDialog by remember { mutableStateOf(false) }
   var showEditRoomDialog by remember { mutableStateOf(false) }
   var showVideoSelectDialog by remember { mutableStateOf(false) }
+  var showSwitchRoomSheet by remember { mutableStateOf(false) }
   var isAnnouncementExpanded by remember { mutableStateOf(false) }
   var showAudioSliders by remember { mutableStateOf(false) }
 
-  // Animated gift floating effect
-  var floatingGiftEmoji by remember { mutableStateOf<String?>(null) }
-  val giftAnimY = remember { Animatable(100f) }
-  val giftAnimAlpha = remember { Animatable(1f) }
+  // Animated gift celebration with auto-removal and queueing
+  val giftQueue = remember { mutableStateListOf<Pair<String, String>>() }
+  var activeFloatingGift by remember { mutableStateOf<Pair<String, String>?>(null) }
+  val giftScale = remember { Animatable(0.2f) }
+  val giftAlpha = remember { Animatable(1f) }
+
+  LaunchedEffect(activeFloatingGift) {
+    if (activeFloatingGift != null) {
+      giftScale.snapTo(0.2f)
+      giftAlpha.snapTo(1f)
+      launch {
+        giftScale.animateTo(
+          targetValue = 1.15f,
+          animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium)
+        )
+      }
+      delay(2200L)
+      launch {
+        giftAlpha.animateTo(0f, animationSpec = tween(350))
+      }
+      delay(350L)
+      activeFloatingGift = null
+      if (giftQueue.isNotEmpty()) {
+        activeFloatingGift = giftQueue.removeAt(0)
+      }
+    }
+  }
 
   val chatListState = rememberLazyListState()
 
@@ -235,6 +264,29 @@ fun RoomDetailScreen(
                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                   )
                 }
+
+                // Room EXP Progress Bar
+                val expInLevel = room.roomXp % 1000
+                val progress = (expInLevel.toFloat() / 1000f).coerceIn(0f, 1f)
+                Spacer(modifier = Modifier.width(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                      .width(44.dp)
+                      .height(3.5.dp)
+                      .clip(RoundedCornerShape(2.dp)),
+                    color = Color(0xFFFBBF24),
+                    trackColor = Color.White.copy(alpha = 0.15f)
+                  )
+                  Spacer(modifier = Modifier.width(3.dp))
+                  Text(
+                    text = "$expInLevel",
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFFBBF24)
+                  )
+                }
               }
 
               // Room ID & Follow Action
@@ -295,8 +347,23 @@ fun RoomDetailScreen(
             }
           }
 
-          // Right: Action Buttons (Theme, Edit/Settings, Invite)
+          // Right: Action Buttons (Switch Room, Theme, Edit/Settings, Invite)
           Row(verticalAlignment = Alignment.CenterVertically) {
+            // Switch Room Button
+            IconButton(
+              onClick = { showSwitchRoomSheet = true },
+              modifier = Modifier
+                .size(34.dp)
+                .testTag("btn_switch_room")
+            ) {
+              Icon(
+                Icons.Default.SwapHoriz,
+                contentDescription = "Switch Room",
+                tint = Color(0xFF38BDF8),
+                modifier = Modifier.size(20.dp)
+              )
+            }
+
             // Theme Button (Available to all; editable by room managers)
             IconButton(
               onClick = { showThemeEditorDialog = true },
@@ -568,74 +635,6 @@ fun RoomDetailScreen(
               .fillMaxWidth()
               .padding(vertical = 12.dp, horizontal = 8.dp)
           ) {
-
-            // PARTNER SEATS: TWO SPECIAL SEATS (INDEX 8 AND 9)
-            Row(
-              modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-              Text(
-                text = "💖 Partner Seats",
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
-              )
-
-              if (isOwner) {
-                Switch(
-                  checked = room.partnerSeatsEnabled,
-                  onCheckedChange = onTogglePartnerSeats
-                )
-              } else {
-                Text(
-                  text = if (room.partnerSeatsEnabled) "ON" else "OFF",
-                  color = if (room.partnerSeatsEnabled) Color(0xFF10B981) else Color.Gray,
-                  fontSize = 11.sp,
-                  fontWeight = FontWeight.Bold
-                )
-              }
-            }
-
-            if (room.partnerSeatsEnabled) {
-              Row(
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-              ) {
-                for (i in 8..9) {
-                  val seat = seats.find { it.seatIndex == i }
-                    ?: RoomSeat(
-                      seatIndex = i,
-                      isPartnerSeat = true,
-                      partnerLabel = "Partner ${i - 7}"
-                    )
-
-                  VoiceSeatItem(
-                    seat = seat,
-                    isCurrentUser = seat.userId == currentUser.id,
-                    theme = theme,
-                    onTakeSeat = { onTakeSeat(i) },
-                    onInspectUser = {
-                      if (seat.userId != null && seat.username != null) {
-                        onInspectUser(
-                          Friend(
-                            userId = seat.userId,
-                            username = seat.username,
-                            avatar = seat.avatar ?: "avatar_1"
-                          )
-                        )
-                      }
-                    }
-                  )
-                }
-              }
-
-              Spacer(modifier = Modifier.height(12.dp))
-            }
-
             // Row 1: Seats 0..3
             Row(
               horizontalArrangement = Arrangement.SpaceAround,
@@ -927,23 +926,53 @@ fun RoomDetailScreen(
         }
       }
 
-      // FLOATING GIFT ANIMATION (if gift sent)
-      floatingGiftEmoji?.let { emoji ->
+      // FLOATING GIFT CELEBRATION (Auto-removes cleanly with smooth spring animation)
+      activeFloatingGift?.let { (name, emoji) ->
         Box(
           modifier = Modifier
             .fillMaxSize()
             .wrapContentSize(Alignment.Center)
         ) {
-          Text(
-            text = emoji,
-            fontSize = 72.sp,
-            modifier = Modifier.scale(giftAnimAlpha.value)
-          )
+          Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+              .scale(giftScale.value)
+              .alpha(giftAlpha.value)
+              .background(Color(0xE60F172A), RoundedCornerShape(20.dp))
+              .border(1.5.dp, Color(0xFFFBBF24).copy(alpha = 0.8f), RoundedCornerShape(20.dp))
+              .padding(horizontal = 28.dp, vertical = 20.dp)
+          ) {
+            Text(text = emoji, fontSize = 68.sp)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+              text = name,
+              fontSize = 18.sp,
+              fontWeight = FontWeight.Bold,
+              color = Color.White
+            )
+            Text(
+              text = "Gift Celebration ✨",
+              fontSize = 12.sp,
+              color = Color(0xFFFBBF24)
+            )
+          }
         }
       }
     }
 
     // DIALOGS & SHEETS
+    if (showSwitchRoomSheet) {
+      SwitchRoomSheet(
+        currentRoomId = room.id,
+        availableRooms = availableRooms,
+        onDismiss = { showSwitchRoomSheet = false },
+        onSelectRoom = { targetRoomId ->
+          showSwitchRoomSheet = false
+          onSwitchRoom(targetRoomId)
+        }
+      )
+    }
+
     if (showGiftsSheet) {
       val wallet = com.example.network.security.ServerCoinManager.getWalletState(currentUser.id)
       RoomGiftsSheet(
@@ -952,7 +981,11 @@ fun RoomDetailScreen(
         onSendGift = { name, emoji, cost ->
           val success = onSendGift(name, emoji, cost)
           if (success) {
-            floatingGiftEmoji = emoji
+            if (activeFloatingGift == null) {
+              activeFloatingGift = name to emoji
+            } else {
+              giftQueue.add(name to emoji)
+            }
           }
           success
         }
@@ -1045,14 +1078,16 @@ fun VoiceSeatItem(
       .testTag("voice_seat_${seat.seatIndex}")
   ) {
     if (isOccupied) {
+      val isDimmed = seat.isOwnerOffline
       Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
           .size(62.dp)
+          .then(if (isDimmed) Modifier.alpha(0.55f) else Modifier)
           .clickable { onInspectUser() }
       ) {
         // Outer Speaking Animated Glow Ring (Double ring)
-        if (seat.isSpeaking) {
+        if (seat.isSpeaking && !seat.isOwnerOffline) {
           Box(
             modifier = Modifier
               .size(60.dp * speakingPulse)
@@ -1077,8 +1112,8 @@ fun VoiceSeatItem(
               )
             )
             .border(
-              width = if (seat.isSpeaking) 2.dp else if (seat.isOwner) 2.dp else 1.5.dp,
-              color = if (seat.isSpeaking) theme.speakingRingColor else if (seat.isOwner) Color(0xFFFBBF24) else theme.primaryAccent.copy(alpha = 0.8f),
+              width = if (seat.isSpeaking && !seat.isOwnerOffline) 2.dp else if (seat.isOwner) 2.dp else 1.5.dp,
+              color = if (seat.isSpeaking && !seat.isOwnerOffline) theme.speakingRingColor else if (seat.isOwner) Color(0xFFFBBF24) else theme.primaryAccent.copy(alpha = 0.8f),
               shape = CircleShape
             )
         ) {
@@ -1121,33 +1156,47 @@ fun VoiceSeatItem(
           }
         }
 
-        // Mute / Speaking Status (Bottom right)
-        Box(
-          modifier = Modifier
-            .size(18.dp)
-            .clip(CircleShape)
-            .background(if (seat.isMuted) Color(0xFFE11D48) else Color(0xFF10B981))
-            .border(1.5.dp, Color(0xFF0F172A), CircleShape)
-            .align(Alignment.BottomEnd),
-          contentAlignment = Alignment.Center
-        ) {
-          Icon(
-            imageVector = if (seat.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.size(11.dp)
-          )
+        // Mute / Speaking / Offline Status (Bottom right)
+        if (seat.isOwnerOffline) {
+          Box(
+            modifier = Modifier
+              .size(18.dp)
+              .clip(CircleShape)
+              .background(Color(0xFFF59E0B))
+              .border(1.5.dp, Color(0xFF0F172A), CircleShape)
+              .align(Alignment.BottomEnd),
+            contentAlignment = Alignment.Center
+          ) {
+            Text("💤", fontSize = 9.sp)
+          }
+        } else {
+          Box(
+            modifier = Modifier
+              .size(18.dp)
+              .clip(CircleShape)
+              .background(if (seat.isMuted) Color(0xFFE11D48) else Color(0xFF10B981))
+              .border(1.5.dp, Color(0xFF0F172A), CircleShape)
+              .align(Alignment.BottomEnd),
+            contentAlignment = Alignment.Center
+          ) {
+            Icon(
+              imageVector = if (seat.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+              contentDescription = null,
+              tint = Color.White,
+              modifier = Modifier.size(11.dp)
+            )
+          }
         }
       }
 
       Spacer(modifier = Modifier.height(4.dp))
 
       Text(
-        text = if (isCurrentUser) "You" else (seat.username ?: "User"),
-        fontSize = 11.sp,
+        text = if (seat.isOwnerOffline) "${seat.username ?: "Owner"}\n(💤 Offline)" else if (isCurrentUser) "You" else (seat.username ?: "User"),
+        fontSize = if (seat.isOwnerOffline) 9.5.sp else 11.sp,
         fontWeight = FontWeight.SemiBold,
-        color = Color.White,
-        maxLines = 1,
+        color = if (seat.isOwnerOffline) Color(0xFFFBBF24) else Color.White,
+        maxLines = if (seat.isOwnerOffline) 2 else 1,
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center
       )
@@ -1184,7 +1233,7 @@ fun VoiceSeatItem(
       Spacer(modifier = Modifier.height(4.dp))
 
       Text(
-        text = if (seat.isPartnerSeat) seat.partnerLabel ?: "Partner Seat" else "Seat ${seat.seatIndex + 1}",
+        text = "Seat ${seat.seatIndex + 1}",
         fontSize = 10.sp,
         color = Color.White.copy(alpha = 0.65f),
         fontWeight = FontWeight.Medium,
@@ -1429,4 +1478,119 @@ private fun formatSeconds(sec: Int): String {
   val m = sec / 60
   val s = sec % 60
   return String.format("%02d:%02d", m, s)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SwitchRoomSheet(
+  currentRoomId: String,
+  availableRooms: List<Room>,
+  onDismiss: () -> Unit,
+  onSelectRoom: (String) -> Unit
+) {
+  ModalBottomSheet(
+    onDismissRequest = onDismiss,
+    containerColor = DarkSurfaceElevated,
+    scrimColor = Color.Black.copy(alpha = 0.6f)
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxWidth()
+        .padding(horizontal = 20.dp, vertical = 12.dp)
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Text(
+          text = "Switch Room 🔄",
+          fontSize = 18.sp,
+          fontWeight = FontWeight.ExtraBold,
+          color = Color.White
+        )
+        IconButton(onClick = onDismiss) {
+          Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
+        }
+      }
+      Text(
+        text = "Seamlessly switch to another live room without leaving the app",
+        fontSize = 12.sp,
+        color = TextSecondary
+      )
+      Spacer(modifier = Modifier.height(14.dp))
+
+      val otherRooms = availableRooms.filter { it.id != currentRoomId }
+      if (otherRooms.isEmpty()) {
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 24.dp),
+          contentAlignment = Alignment.Center
+        ) {
+          Text("No other active rooms available right now.", color = TextSecondary, fontSize = 13.sp)
+        }
+      } else {
+        LazyColumn(
+          modifier = Modifier.fillMaxWidth(),
+          verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+          items(otherRooms) { targetRoom ->
+            Surface(
+              color = DarkSurfaceCard,
+              shape = RoundedCornerShape(14.dp),
+              border = androidx.compose.foundation.BorderStroke(1.dp, DarkCardBorderSubtle),
+              modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                  onDismiss()
+                  onSelectRoom(targetRoom.id)
+                }
+            ) {
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .padding(14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+              ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                  Text(
+                    text = if (targetRoom.category == RoomCategory.WATCH_TOGETHER) "🎬" else "🎙️",
+                    fontSize = 24.sp
+                  )
+                  Spacer(modifier = Modifier.width(12.dp))
+                  Column {
+                    Text(
+                      text = targetRoom.name,
+                      fontSize = 14.sp,
+                      fontWeight = FontWeight.Bold,
+                      color = Color.White
+                    )
+                    Text(
+                      text = "Host: ${targetRoom.ownerName} • LV.${targetRoom.roomLevel}",
+                      fontSize = 11.sp,
+                      color = TextSecondary
+                    )
+                  }
+                }
+                Button(
+                  onClick = {
+                    onDismiss()
+                    onSelectRoom(targetRoom.id)
+                  },
+                  colors = ButtonDefaults.buttonColors(containerColor = IndigoPrimary),
+                  shape = RoundedCornerShape(8.dp),
+                  contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                  Text("Join", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                }
+              }
+            }
+          }
+        }
+      }
+      Spacer(modifier = Modifier.height(24.dp))
+    }
+  }
 }

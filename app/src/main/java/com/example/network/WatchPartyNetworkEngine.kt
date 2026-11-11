@@ -192,7 +192,7 @@ class WatchPartyNetworkEngine(
     val code = "WP-" + (1000..9999).random()
 
     // 1. Start embedded HTTP byte-range server on host device (for local LAN playback)
-    val localStreamUrl = localMediaServer.start(media)
+    val localStreamUrl = localMediaServer.start(media, currentUser.id, code)
     localMediaServer.currentQuality = quality
 
     // 2. Publish media to remote streaming backend for internet participants
@@ -1117,55 +1117,55 @@ class WatchPartyNetworkEngine(
   fun getSampleMediaPresets(): List<LocalMediaItem> {
     return listOf(
       LocalMediaItem(
-        uriString = "https://media.w3.org/2010/05/bunny/trailer.mp4",
+        uriString = "https://commondatastorage.googleapis.com/exoplayer-test-media-0/BigBuckBunny_320x180.mp4",
         title = "Cyberpunk: Edgerunners Ep. 1",
         mimeType = "video/mp4",
-        durationSec = 33,
-        fileSizeBytes = 11053871L,
+        durationSec = 596,
+        fileSizeBytes = 64657027L,
         mediaType = StreamMediaType.VIDEO,
         resolution = "1080p FHD (60fps)",
         codec = "H.264 / AAC 5.1",
         isLocalFile = false
       ),
       LocalMediaItem(
-        uriString = "https://media.w3.org/2010/05/sintel/trailer.mp4",
+        uriString = "https://storage.googleapis.com/exoplayer-test-media-1/mp4/android-screens-10s.mp4",
         title = "Interstellar Odyssey (Sci-Fi Epic)",
         mimeType = "video/mp4",
-        durationSec = 52,
-        fileSizeBytes = 4372373L,
+        durationSec = 10,
+        fileSizeBytes = 1854368L,
         mediaType = StreamMediaType.VIDEO,
         resolution = "720p HD",
         codec = "H.264 / AAC",
         isLocalFile = false
       ),
       LocalMediaItem(
-        uriString = "https://archive.org/download/BigBuckBunny_124/Content/big_buck_bunny_720p_surround.mp4",
+        uriString = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
         title = "Synthwave Night Drive & Visuals",
-        mimeType = "video/mp4",
-        durationSec = 596,
-        fileSizeBytes = 61878609L,
+        mimeType = "application/x-mpegURL",
+        durationSec = 634,
+        fileSizeBytes = 25000000L,
         mediaType = StreamMediaType.VIDEO,
-        resolution = "720p Surround",
-        codec = "H.264 / AC3",
+        resolution = "720p HLS Stream",
+        codec = "H.264 / AAC",
         isLocalFile = false
       ),
       LocalMediaItem(
-        uriString = "https://media.w3.org/2010/05/video/movie_300.mp4",
+        uriString = "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/bipbop_4x3_variant.m3u8",
         title = "Lofi Study Beats & Short Reel",
-        mimeType = "video/mp4",
-        durationSec = 30,
-        fileSizeBytes = 2757913L,
+        mimeType = "application/x-mpegURL",
+        durationSec = 1800,
+        fileSizeBytes = 15000000L,
         mediaType = StreamMediaType.VIDEO,
-        resolution = "480p SD",
+        resolution = "480p Adaptive HLS",
         codec = "H.264",
         isLocalFile = false
       ),
       LocalMediaItem(
-        uriString = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
+        uriString = "https://commondatastorage.googleapis.com/exoplayer-test-media-0/Jazz_In_Paris.mp3",
         title = "Synthwave Chillout Radio & Beats",
         mimeType = "audio/mpeg",
-        durationSec = 372,
-        fileSizeBytes = 8945229L,
+        durationSec = 104,
+        fileSizeBytes = 4110593L,
         mediaType = StreamMediaType.AUDIO,
         resolution = "320 kbps High Fidelity",
         codec = "MP3 / Stereo",

@@ -13,7 +13,36 @@ import kotlin.random.Random
 
 object ActiveGameSessionManager {
   private const val TAG = "GameSessionManager"
+  const val BOT_USER_ID = "BOT_AI_OPPONENT"
   private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+  fun startBotGame(
+    userId: String,
+    username: String,
+    avatar: String,
+    gameType: GameType
+  ): GameSession {
+    val hostPlayer = GamePlayer(
+      userId = userId,
+      username = username,
+      avatar = avatar,
+      isHost = true,
+      colorTag = if (gameType == GameType.CHESS) "WHITE" else "RED"
+    )
+    val botPlayer = GamePlayer(
+      userId = BOT_USER_ID,
+      username = "🤖 BOT [AI]",
+      avatar = "avatar_bot",
+      isHost = false,
+      colorTag = if (gameType == GameType.CHESS) "BLACK" else "GREEN"
+    )
+    return createGameSession(
+      gameType = gameType,
+      gameMode = GameMode.RANDOM,
+      privateCode = generatePrivateCode(),
+      players = listOf(hostPlayer, botPlayer)
+    )
+  }
 
   // Thread-safe game sessions map
   private val sessions = ConcurrentHashMap<String, GameSession>()
@@ -356,6 +385,10 @@ object ActiveGameSessionManager {
       lastHeartbeatMs = System.currentTimeMillis()
     )
     publishSessions()
+
+    if (newStatus == GameStatus.ACTIVE && updatedState.activeColor == ChessPieceColor.BLACK && updatedState.blackPlayerId == BOT_USER_ID) {
+      scheduleBotChessMove(matchId)
+    }
     return true
   }
 
@@ -423,6 +456,10 @@ object ActiveGameSessionManager {
       lastHeartbeatMs = System.currentTimeMillis()
     )
     publishSessions()
+
+    if (updatedLudo.currentTurnPlayerId == BOT_USER_ID) {
+      scheduleBotLudoTurn(matchId)
+    }
     return roll
   }
 
@@ -450,7 +487,56 @@ object ActiveGameSessionManager {
       lastHeartbeatMs = System.currentTimeMillis()
     )
     publishSessions()
+
+    if (newStatus == GameStatus.ACTIVE && updatedLudo.currentTurnPlayerId == BOT_USER_ID) {
+      scheduleBotLudoTurn(matchId)
+    }
     return true
+  }
+
+  private fun scheduleBotChessMove(matchId: String) {
+    scope.launch {
+      delay(800L)
+      val session = sessions[matchId] ?: return@launch
+      val chess = session.chessState ?: return@launch
+      if (session.status != GameStatus.ACTIVE || chess.activeColor != ChessPieceColor.BLACK) return@launch
+
+      val legalMoves = mutableListOf<Pair<ChessPosition, ChessPosition>>()
+      for ((pos, piece) in chess.board) {
+        if (piece.color == ChessPieceColor.BLACK) {
+          val targets = ChessEngine.getLegalMoves(chess.board, pos, ChessPieceColor.BLACK)
+          for (t in targets) {
+            legalMoves.add(pos to t)
+          }
+        }
+      }
+      if (legalMoves.isNotEmpty()) {
+        val captureMove = legalMoves.firstOrNull { chess.board.containsKey(it.second) }
+        val chosen = captureMove ?: legalMoves.random()
+        makeChessMove(matchId, chosen.first, chosen.second)
+      }
+    }
+  }
+
+  private fun scheduleBotLudoTurn(matchId: String) {
+    scope.launch {
+      delay(600L)
+      val session = sessions[matchId] ?: return@launch
+      val ludo = session.ludoState ?: return@launch
+      if (session.status != GameStatus.ACTIVE || ludo.currentTurnPlayerId != BOT_USER_ID) return@launch
+
+      val (rolledState, _) = LudoEngine.rollDice(ludo)
+      sessions[matchId] = session.copy(ludoState = rolledState, lastHeartbeatMs = System.currentTimeMillis())
+      publishSessions()
+
+      if (rolledState.movableTokenIds.isNotEmpty()) {
+        delay(600L)
+        val chosenToken = rolledState.movableTokenIds.random()
+        moveLudoToken(matchId, BOT_USER_ID, chosenToken)
+      } else if (rolledState.currentTurnPlayerId == BOT_USER_ID) {
+        scheduleBotLudoTurn(matchId)
+      }
+    }
   }
 
   fun requestRematch(matchId: String, userId: String) {

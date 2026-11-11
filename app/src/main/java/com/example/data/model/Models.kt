@@ -68,7 +68,13 @@ data class User(
   val chessWins: Int = 16,
   val ludoGames: Int = 31,
   val ludoWins: Int = 19,
-  val coins: Int = 1450
+  val coins: Int = 1450,
+  val equippedRingId: String? = null,
+  val equippedNameTag: String? = null,
+  val equippedCharmBadge: String? = null,
+  val unlockedRings: List<String> = emptyList(),
+  val unlockedNameTags: List<String> = emptyList(),
+  val unlockedFrames: List<String> = listOf("Neon Purple", "Gold Crown", "Cyberpunk", "Diamond Glitz")
 ) {
   val xp: Int get() = personalXp
   val level: Int get() = personalLevel

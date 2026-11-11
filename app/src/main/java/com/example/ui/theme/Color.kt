@@ -72,6 +72,7 @@ val GoldOwner = Color(0xFFF59E0B)
 val GoldOwnerContainer = Color(0xFF451A03)
 val ShieldAdmin = Color(0xFF8B5CF6)
 val AmberXp = Color(0xFFFBBF24)
+val GoldAccent = Color(0xFFFBBF24)
 val VioletAudience = Color(0xFF8B5CF6)
 
 // Light Theme Fallbacks
